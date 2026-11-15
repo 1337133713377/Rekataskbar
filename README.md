@@ -69,9 +69,15 @@ Pour voir la barre sans Voicemeeter ni REKA : `REKA-Taskbar.exe --demo`.
 
 ## Mises à jour automatiques
 
-La barre vérifie s'il existe une nouvelle version au démarrage, puis toutes les 6 heures. Quand c'est le cas, elle la télécharge en arrière-plan, vérifie son empreinte, remplace son exe et redémarre dessus en une seconde ou deux ; une bulle près de l'horloge annonce la nouvelle version. Tes réglages sont conservés. Si tu es en train de te servir de la barre (menu, réglages, mini-console), elle attend que tu aies fini.
+La barre vérifie s'il existe une nouvelle version au démarrage, puis toutes les 3 heures (et quelques minutes plus tard si le réseau manquait). Quand c'est le cas :
 
-Dans **Réglages → Barre**, tu peux couper l'installation automatique : un bouton **Mise à jour** apparaît alors dans la barre quand une version est prête, avec ses nouveautés. Le même bouton apparaît si l'exe est dans un dossier où il ne peut pas se remplacer. **Clic droit → Rechercher les mises à jour…** vérifie tout de suite.
+1. elle la télécharge en arrière-plan ; la progression s'affiche dans la barre (« Mise à jour 1.1.0 · 42 % ») ;
+2. elle vérifie l'empreinte du fichier, puis attend que tu ne te serves plus de la barre (menu, réglages, mini-console) **ni d'un jeu en plein écran** ; un clic sur « 1.1.0 prête » l'installe tout de suite ;
+3. elle remplace son exe et redémarre en une ou deux secondes ; une bulle près de l'horloge annonce la version, et un clic dessus montre les nouveautés (aussi dans **clic droit → Nouveautés…**).
+
+**Retour automatique en arrière.** Pendant le redémarrage, l'ancienne version reste prête et surveille la nouvelle. Si celle-ci ne démarre pas ou ne fonctionne pas normalement pendant ses 20 premières secondes, l'ancienne version est remise en place et relancée, une bulle te prévient, et la version fautive n'est plus réinstallée automatiquement. Le journal de ces étapes est dans `%APPDATA%\REKA Taskbar\update.log`.
+
+Dans **Réglages → Barre**, tu peux couper l'installation automatique : un bouton **Mise à jour** apparaît alors dans la barre quand une version est disponible, avec ses nouveautés. Le même bouton apparaît si l'exe est dans un dossier où il ne peut pas se remplacer. **Clic droit → Rechercher les mises à jour…** vérifie tout de suite.
 
 Les nouveautés de chaque version sont dans [NOUVEAUTES.md](reka_taskbar/NOUVEAUTES.md).
 
@@ -115,18 +121,20 @@ Même base que REKA : Python 3.11+, PySide6, PyInstaller. Voicemeeter est pilot�
 | `core/voicemeeter.py` | API Remote de Voicemeeter et thread de scrutation |
 | `core/windows.py`, `core/appbar.py`, `core/winapi.py` | fenêtres ouvertes, ancrage de la barre, barre de Windows |
 | `core/media.py`, `core/system.py`, `core/weather.py`, `core/shell.py` | musique, système, météo, services de Windows |
-| `core/updater.py`, `ui/update_dialog.py` | mises à jour automatiques |
+| `core/updater.py`, `ui/update_dialog.py`, `ui/widgets/update.py` | mises à jour automatiques (vérification, téléchargement, bouton) |
+| `core/update_guard.py`, `boot.py` | gardien des mises à jour : lancement surveillé et retour en arrière, sans Qt |
+| `tests/e2e_update.py` | mise à jour de bout en bout avec le vrai exe (build Windows) |
 | `core/demo.py` | moteurs simulés (`--demo`, `--selftest`, tests) |
 | `ui/bar.py`, `ui/widgets/` | la barre et ses widgets |
 | `ui/mixer_popup.py`, `ui/settings_dialog.py` | mini-console, réglages |
 
 Chaque push lance les tests sous Linux puis sous Windows (dont les appels Win32 réels), construit l'exe et lui fait passer son auto-test (`--selftest`).
 
-**Publier une version** : augmente `APP_VERSION` dans `reka_taskbar/core/config.py` et ajoute sa section dans `reka_taskbar/NOUVEAUTES.md`. Puis, sur GitHub, **Releases → Draft a new release**, choisis un tag (de préférence `v` + la version, par exemple `v1.0.1`) et publie.
+**Publier une version** : augmente `APP_VERSION` dans `reka_taskbar/core/config.py`, ajoute sa section `## x.y.z` en haut de `reka_taskbar/NOUVEAUTES.md`, puis pousse sur la branche principale. C'est tout.
 
-Le build se lance tout seul (environ 4 minutes) et ajoute à la release `REKA-Taskbar.exe` et son `version.json` (version, taille, SHA-256, nouveautés). Les barres installées lisent celui de la dernière release et se mettent à jour. Si une release est restée sans exe : **Actions → Build Windows → Run workflow**, avec son tag dans « release_tag ».
+Le build (environ 6 minutes) lance tous les tests, dont deux vraies mises à jour de bout en bout sur Windows : une qui réussit, une qui ne démarre pas et doit revenir en arrière. Si tout passe et que cette version n'est pas encore publiée, il crée la release `vx.y.z` avec `REKA-Taskbar.exe` et son `version.json` ; les barres installées la trouvent à leur prochaine vérification. Un push qui ne change pas `APP_VERSION` ne publie rien.
 
-La version de l'exe est toujours `APP_VERSION` : n'oublie pas de l'augmenter, sinon les barres installées ne verront rien de nouveau.
+Tu peux aussi publier une release à la main sur GitHub (n'importe quel tag) : le build y ajoute l'exe. Si une release est restée sans exe : **Actions → Build Windows → Run workflow**, avec son tag dans « release_tag ».
 
 ---
 

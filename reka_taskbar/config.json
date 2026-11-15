@@ -61,7 +61,8 @@
   "update": {
     "check": true,
     "auto_install": true,
-    "interval_hours": 6,
+    "interval_hours": 3,
+    "first_check_s": 20,
     "skipped_version": "",
     "url": ""
   },

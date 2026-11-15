@@ -117,6 +117,7 @@ class TaskbarWindow(QWidget):
         self.restart_after_update = updater.launch_restart
         self.executable = Path(sys.executable)
         self.update_widget: UpdateWidget | None = None
+        self._notes = None
         self.widgets: dict[str, QWidget] = {}
         self._zones: dict[str, QWidget] = {}
         self._mixer: MixerPopup | None = None
@@ -426,20 +427,41 @@ class TaskbarWindow(QWidget):
 
     # ------------------------------------------------------------ mises à jour
     def open_update(self) -> None:
-        """Fenêtre « Mise à jour disponible » (installation à la main)."""
+        """Bouton « Mise à jour » : selon l'état, installer tout de suite la
+        version prête, annoncer le téléchargement en cours, ou ouvrir la
+        fenêtre « Mise à jour disponible » (installation à la main)."""
         from ui.update_dialog import UpdateDialog
 
-        update = self._updates.latest
+        updates = self._updates
+        update = updates.latest
         if update is None:
             return
-        dialog = UpdateDialog(update, self._updates.current_version, self._updates.self_update,
-                              self._updates.error)
+        if updates.state == updater.STATE_READY and updates.ready_path is not None:
+            self.install_ready_update(update, updates.ready_path, force=True)
+            return
+        if updates.state == updater.STATE_DOWNLOADING:
+            QMessageBox.information(None, config.APP_NAME,
+                                    f"La version {update.version} se télécharge ({updates.percent} %) : "
+                                    "la barre l'installera et redémarrera toute seule.")
+            return
+        dialog = UpdateDialog(update, updates.current_version, updates.self_update, updates.error)
         dialog.exec()
         if dialog.skipped:
-            self._updates.skip(update)
+            updates.skip(update)
             self.save()
         elif dialog.installed:
-            self._restart_on_new_exe()
+            self._restart_on_new_exe(update.version)
+
+    def show_release_notes(self, since: str | None = None) -> None:
+        """Nouveautés des versions postérieures à `since` (toutes si vide)."""
+        from ui.notes_dialog import NotesDialog
+
+        dialog = NotesDialog(since)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._notes = dialog
 
     def check_for_updates(self) -> None:
         """« Rechercher les mises à jour » : le résultat est toujours annoncé."""
@@ -468,14 +490,18 @@ class TaskbarWindow(QWidget):
 
     def is_busy(self) -> bool:
         """L'utilisateur est-il en train de se servir de la barre (menu, réglages,
-        mini-console, boîte de dialogue) ? On ne redémarre pas sous ses doigts."""
+        mini-console, boîte de dialogue) ou d'un jeu en plein écran ? On ne
+        redémarre pas sous ses doigts."""
         app = QApplication.instance()
-        return bool(self._settings is not None or self._mixer is not None
+        return bool(self._settings is not None or self._mixer is not None or self._behind
                     or app.activePopupWidget() is not None or app.activeModalWidget() is not None)
 
-    def install_ready_update(self, update, path) -> None:
-        """Mise à jour téléchargée et vérifiée : installation, puis redémarrage."""
-        if self.is_busy():
+    def install_ready_update(self, update, path, force: bool = False) -> None:
+        """Mise à jour téléchargée et vérifiée : installation, puis redémarrage.
+        `force` : demandée par un clic (pas d'attente)."""
+        if self._updates.latest is not update and not force:
+            return                      # version ignorée ou remplacée entre-temps
+        if not force and self.is_busy():
             QTimer.singleShot(updater.BUSY_RETRY_MS, lambda: self.install_ready_update(update, path))
             return
         try:
@@ -485,10 +511,11 @@ class TaskbarWindow(QWidget):
             self._updates.fail(str(exc))        # le bouton « Mise à jour » prend le relais
             return
         log.info("Mise à jour %s installée : redémarrage.", update.version)
-        self._restart_on_new_exe()
+        self._restart_on_new_exe(update.version)
 
-    def _restart_on_new_exe(self) -> None:
-        if self.restart_after_update(self._updates.current_version):
+    def _restart_on_new_exe(self, new_version: str) -> None:
+        if self.restart_after_update(self._updates.current_version, new_version,
+                                     self.executable):
             self.quit()
         else:
             QMessageBox.information(None, config.APP_NAME,
@@ -545,11 +572,14 @@ class TaskbarWindow(QWidget):
             menu.addSeparator()
         menu.addAction("Mini-console…", lambda: self.open_mixer(None))
         menu.addAction("Réglages de la barre…", lambda: self.open_settings(""))
-        if self._updates.latest is not None and self._updates.state == updater.STATE_AVAILABLE:
-            menu.addAction(f"Installer la version {self._updates.latest.version}…",
-                           self.open_update)
+        latest, state = self._updates.latest, self._updates.state
+        if latest is not None and state == updater.STATE_AVAILABLE:
+            menu.addAction(f"Installer la version {latest.version}…", self.open_update)
+        elif latest is not None and state == updater.STATE_READY:
+            menu.addAction(f"Installer la version {latest.version} maintenant", self.open_update)
         else:
             menu.addAction("Rechercher les mises à jour…", self.check_for_updates)
+        menu.addAction("Nouveautés…", lambda: self.show_release_notes(None))
         if sys.platform == "win32" and self._persist:
             hidden = bool(self._cfg.get("bar", {}).get("hide_windows_taskbar", False))
             menu.addAction("Afficher la barre des tâches de Windows" if hidden

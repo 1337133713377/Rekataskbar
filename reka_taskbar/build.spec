@@ -60,16 +60,17 @@ version_info = None if VSVersionInfo is None else VSVersionInfo(
 )
 
 a = Analysis(
-    ["main.py"],
+    ["boot.py"],             # gardien des mises à jour (sans Qt), puis main.py
     pathex=[],
     binaries=WINRT_BINARIES,
     # Ressources lues à l'exécution via core.config.resource_path()
-    datas=[("config.json", "."), ("assets", "assets"),
+    datas=[("config.json", "."), ("assets", "assets"), ("NOUVEAUTES.md", "."),
            # Version et dépôt (écrit par le build GitHub) : mises à jour automatiques
            *([("build_info.json", ".")]
              if os.path.isfile(os.path.join(SPECPATH, "build_info.json")) else [])],
     # Importés à l'intérieur de fonctions : on les déclare explicitement
-    hiddenimports=["core.demo", "core.winapi", "ui.settings_dialog", "psutil", *WINRT_MODULES],
+    hiddenimports=["main", "core.update_guard", "core.demo", "core.winapi", "ui.settings_dialog",
+                   "ui.notes_dialog", "ui.update_dialog", "psutil", *WINRT_MODULES],
     hookspath=[],
     runtime_hooks=[],
     excludes=["tkinter", "unittest", "pydoc", "PySide6.QtQml", "PySide6.QtQuick",

@@ -29,7 +29,7 @@ from PySide6.QtCore import QLockFile, QtMsgType, QTimer, qInstallMessageHandler
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from core import appbar, config
+from core import appbar, config, update_guard
 from core.media import create_media_backend
 from core.reka_link import RekaLink
 from core.system import SystemMonitor
@@ -171,6 +171,7 @@ class TaskbarApp:
         menu.addAction("Mini-console…", lambda: self.bar.open_mixer(None))
         menu.addAction("Réglages de la barre…", lambda: self.bar.open_settings(""))
         menu.addAction("Rechercher les mises à jour…", self.bar.check_for_updates)
+        menu.addAction("Nouveautés…", lambda: self.bar.show_release_notes(None))
         menu.addSeparator()
         menu.addAction(f"Quitter {config.APP_NAME}", self.bar.quit)
         self.tray.setContextMenu(menu)
@@ -365,6 +366,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="rend la barre des tâches de Windows puis quitte")
     parser.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--updated-from", metavar="VERSION", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--rolled-back", metavar="VERSION", default="", help=argparse.SUPPRESS)
     return parser.parse_args(argv[1:])
 
 
@@ -410,17 +412,29 @@ def main() -> int:
             return run_selftest(app, taskbar, Path(args.selftest))
         return app.exec()
 
-    # Une session précédente a pu laisser la barre de Windows cachée (plantage)
-    appbar.restore_windows_taskbar_if_needed(config.app_data_dir())
-
     lock = QLockFile(str(config.app_data_dir() / "instance.lock"))
     if not lock.tryLock(RESTART_WAIT_MS if args.restart else 200):
         QMessageBox.information(None, config.APP_NAME, f"{config.APP_NAME} est déjà ouverte.")
         return 0
+    # Une session précédente a pu laisser la barre de Windows cachée (plantage) ;
+    # vérifié une fois le verrou obtenu, pour ne pas gêner une instance qui se ferme
+    appbar.restore_windows_taskbar_if_needed(config.app_data_dir())
     if args.restart:
         cfg = config.load_config()      # relue : l'instance précédente l'a écrite en partant
-    # Après une mise à jour : l'ancien exe (encore verrouillé un instant) est supprimé
-    retry_cleanup(OLD_EXE_RETRIES)
+    running_exe = Path(sys.executable) if getattr(sys, "frozen", False) else None
+    if update_guard.startup(config.APP_VERSION, running_exe):
+        # Nouvelle version surveillée par le gardien : on confirme qu'elle marche
+        # après quelques secondes, puis on supprime l'ancien exe (le gardien le
+        # garde ouvert jusque-là, pour pouvoir revenir en arrière)
+        def healthy() -> None:
+            log.info("Nouvelle version en bon état : confirmé.")
+            update_guard.confirm()
+            retry_cleanup(OLD_EXE_RETRIES)
+
+        QTimer.singleShot(update_guard.HEALTHY_AFTER_MS, healthy)
+    else:
+        # Après une mise à jour : l'ancien exe (encore verrouillé un instant) est supprimé
+        retry_cleanup(OLD_EXE_RETRIES)
 
     try:
         taskbar = TaskbarApp(cfg)
@@ -435,12 +449,25 @@ def main() -> int:
     app.commitDataRequest.connect(lambda _manager: taskbar.bar.shutdown())   # fermeture de session
     taskbar.start()
     taskbar.add_tray_icon(icon)
-    if args.updated_from:
+    if args.rolled_back:
+        log.warning("La version %s n'a pas démarré : retour à la version %s.",
+                    args.rolled_back, config.APP_VERSION)
+        if taskbar.tray is not None:
+            taskbar.tray.showMessage(
+                config.APP_NAME,
+                f"La version {args.rolled_back} n'a pas pu démarrer : retour à la version "
+                f"{config.APP_VERSION}. Elle ne sera pas réinstallée automatiquement.",
+                QSystemTrayIcon.MessageIcon.Warning, 10000)
+    elif args.updated_from:
         log.info("Mise à jour : %s → %s", args.updated_from, config.APP_VERSION)
         if taskbar.tray is not None:
-            taskbar.tray.showMessage(config.APP_NAME,
-                                     f"Mise à jour installée : version {config.APP_VERSION}.",
-                                     icon, 5000)
+            # Une bulle et non une fenêtre : la mise à jour a pu se faire en plein jeu
+            taskbar.tray.messageClicked.connect(
+                lambda: taskbar.bar.show_release_notes(args.updated_from))
+            taskbar.tray.showMessage(
+                config.APP_NAME,
+                f"Mise à jour installée : version {config.APP_VERSION}. "
+                "Clic pour voir les nouveautés.", icon, 8000)
     if args.settings:
         taskbar.bar.open_settings("")
     exit_code = app.exec()

@@ -15,8 +15,13 @@ dépôt) : il sait donc où regarder.
   REKA-Taskbar.old.exe). La barre redémarre sur le nouvel exe, qui supprime
   l'ancien.
 
+Le remplacement et le redémarrage passent par le gardien (core/update_guard.py) :
+il lance la nouvelle version depuis l'ancien exe et revient à l'ancienne si la
+nouvelle ne démarre pas.
+
 Avec l'installation automatique désactivée (ou si l'exe est dans un dossier
-protégé), un bouton « Mise à jour » apparaît dans la barre à la place.
+protégé), un bouton « Mise à jour » apparaît dans la barre à la place. Pendant
+un téléchargement automatique, la barre en montre la progression.
 
 En développement (python main.py), pas de build_info.json : pas de vérification.
 """
@@ -28,7 +33,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
 import threading
 import urllib.request
@@ -38,25 +42,33 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from core import config
+from core import config, update_guard
+from core.update_guard import UpdateError, update_dir
+
+# Opérations sur les fichiers : dans le garde (sans Qt), réexportées ici
+install = update_guard.install
+cleanup_previous = update_guard.cleanup_previous
+old_exe_path = update_guard.old_exe_path
 
 log = logging.getLogger(__name__)
 
 BUILD_INFO_FILE = "build_info.json"
 VERSION_FILE = "version.json"
 EXE_NAME = "REKA-Taskbar.exe"
-OLD_SUFFIX = ".old.exe"
 FETCH_TIMEOUT_S = 10.0
 DOWNLOAD_TIMEOUT_S = 30.0
 CHUNK = 64 * 1024
 MAX_VERSION_FILE = 64 * 1024
-START_DELAY_MS = 20_000         # première vérification : une fois la session bien lancée
+START_DELAY_S = 20              # première vérification : une fois la session bien lancée
 MIN_INTERVAL_H = 1.0
-BUSY_RETRY_MS = 60_000          # menu ou réglages ouverts : on redémarre un peu plus tard
-
-
-class UpdateError(Exception):
-    """Erreur présentable telle quelle à l'utilisateur."""
+DEFAULT_INTERVAL_H = 3.0
+BUSY_RETRY_MS = 60_000          # menu, réglages ou jeu plein écran : on redémarre plus tard
+# Vérification ratée (pas encore de réseau au démarrage…) : nouvel essai bien
+# avant la vérification régulière
+CHECK_RETRY_MS = (5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000)
+DOWNLOAD_RETRY_MS = 10 * 60_000
+DOWNLOAD_ATTEMPTS = 3
+LOOPBACK = ("http://127.0.0.1:", "http://localhost:")   # serveur local (tests de bout en bout)
 
 
 @dataclass(frozen=True)
@@ -120,7 +132,8 @@ def parse_update(data: dict) -> UpdateInfo:
                             str(data.get("published", "")))
     except (KeyError, TypeError, ValueError) as exc:
         raise UpdateError(f"Description de la mise à jour invalide ({exc}).") from exc
-    if (not update.url.lower().startswith("https://") or len(update.sha256) != 64
+    secure = update.url.lower().startswith("https://") or update.url.startswith(LOOPBACK)
+    if (not secure or len(update.sha256) != 64
             or any(c not in "0123456789abcdef" for c in update.sha256) or update.size <= 0):
         raise UpdateError("Description de la mise à jour invalide (adresse, empreinte ou taille).")
     return update
@@ -150,10 +163,6 @@ def fetch_update(url: str, timeout: float = FETCH_TIMEOUT_S) -> UpdateInfo:
     if not isinstance(data, dict):
         raise UpdateError("Description de la mise à jour invalide.")
     return parse_update(data)
-
-
-def update_dir() -> Path:
-    return config.app_data_dir() / "update"
 
 
 def download(update: UpdateInfo, dest: Path,
@@ -191,79 +200,27 @@ def download(update: UpdateInfo, dest: Path,
     return dest
 
 
-def old_exe_path(current: Path) -> Path:
-    return current.with_name(current.stem + OLD_SUFFIX)
-
-
-def install(new_exe: Path, current: Path) -> None:
-    """Met `new_exe` à la place de `current` (l'exe en cours) : l'exe en cours
-    est renommé en .old.exe (Windows le permet même s'il tourne), puis le
-    nouveau prend son nom. En cas d'échec, l'ancien est remis en place."""
-    old = old_exe_path(current)
-    where = f"Impossible de remplacer REKA Taskbar dans {current.parent}"
-    try:
-        old.unlink(missing_ok=True)         # reste d'une mise à jour précédente
-        os.replace(current, old)
-    except OSError as exc:
-        raise UpdateError(f"{where} ({exc}).") from exc
-    try:
-        shutil.move(str(new_exe), str(current))
-    except Exception as exc:
-        try:
-            if current.exists():
-                current.unlink()
-            os.replace(old, current)
-        except OSError:
-            log.exception("Mise à jour : ancien exe non remis en place (%s)", old)
-        raise UpdateError(f"Impossible d'installer la mise à jour ({exc}).") from exc
-    log.info("Mise à jour installée : %s (ancien exe : %s)", current, old)
-
-
-def cleanup_previous(current: Path | None = None) -> bool:
-    """Supprime l'ancien exe et les téléchargements restants ; False si l'ancien
-    exe est encore verrouillé (l'ancienne instance finit de se fermer)."""
-    if current is None:
-        if not getattr(sys, "frozen", False):
-            return True
-        current = Path(sys.executable)
-    done = True
-    old = old_exe_path(current)
-    if old.exists():
-        try:
-            old.unlink()
-            log.info("Ancien exe supprimé : %s", old)
-        except OSError:
-            done = False
-    folder = update_dir()
-    if folder.is_dir():
-        shutil.rmtree(folder, ignore_errors=True)
-    return done
-
-
 def can_self_update() -> bool:
     """Remplacement automatique possible : exe PyInstaller (pas en développement)."""
     return bool(getattr(sys, "frozen", False)) and Path(sys.executable).suffix.lower() == ".exe"
 
 
-def restart_command(previous_version: str) -> tuple[str, list[str]]:
-    """Commande qui relance la barre après une mise à jour."""
-    return sys.executable, ["--restart", "--updated-from", previous_version]
+def launch_restart(previous_version: str, new_version: str = "",
+                   executable: Path | None = None) -> bool:
+    """Redémarre sur le nouvel exe (déjà installé) ; l'appelant quitte ensuite.
 
-
-def launch_restart(previous_version: str) -> bool:
-    """Lance la nouvelle instance (détachée) ; l'appelant quitte ensuite."""
-    from PySide6.QtCore import QProcess
-
-    program, args = restart_command(previous_version)
-    # Exe PyInstaller « onefile » : sans cette variable, la nouvelle instance
-    # se croirait un sous-processus de celle-ci et réutiliserait son dossier
-    # temporaire, supprimé dès que cette instance se ferme.
-    os.environ["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    result = QProcess.startDetached(program, args)
-    started = result[0] if isinstance(result, tuple) else bool(result)
-    if not started:
-        log.error("Impossible de relancer la barre : %s %s", program, " ".join(args))
-    return started
+    Le gardien, lancé depuis l'ancien exe, démarre la nouvelle version et la
+    surveille ; s'il ne peut pas partir, la nouvelle version est lancée
+    directement (sans retour en arrière possible)."""
+    exe = executable or Path(sys.executable)
+    if new_version and update_guard.start_watched_restart(previous_version, new_version, exe):
+        return True
+    try:
+        update_guard.launch(exe, ["--restart", "--updated-from", previous_version])
+    except OSError as exc:
+        log.error("Impossible de relancer la barre (%s) : %s", exe, exc)
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -279,22 +236,25 @@ STATE_AVAILABLE = "available"       # à installer à la main (bouton « Mise à
 class UpdateManager(QObject):
     """Vérifie, télécharge et propose (ou installe) les mises à jour.
 
-    - `available` : une version plus récente existe (UpdateInfo) ;
+    - `available` : une version plus récente est à installer à la main (UpdateInfo) ;
+    - `progress` : avancement du téléchargement automatique (pourcentage) ;
     - `ready` : l'exe est téléchargé et vérifié (UpdateInfo, Path) : à
-      installer dès que la barre n'est pas occupée ;
+      installer dès que l'utilisateur ne se sert pas de la barre ;
     - `checked` : fin d'une vérification (UpdateInfo ou None, message d'erreur).
     """
 
     available = Signal(object)
     ready = Signal(object, object)
+    progress = Signal(int)
     checked = Signal(object, str)
     state_changed = Signal(str)
     _fetched = Signal(object, str, bool)      # (UpdateInfo | None, erreur, manuelle)
     _downloaded = Signal(object, object, str)  # (UpdateInfo, Path | None, erreur)
+    _progressed = Signal(int)
 
     def __init__(self, cfg: dict, build: BuildInfo | None,
                  fetch: Callable[[str], UpdateInfo] = fetch_update,
-                 fetch_exe: Callable[[UpdateInfo, Path], Path] = download,
+                 fetch_exe: Callable[..., Path] = download,
                  self_update: bool | None = None,
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -304,13 +264,21 @@ class UpdateManager(QObject):
         self._fetch_exe = fetch_exe
         self.self_update = can_self_update() if self_update is None else self_update
         self.latest: UpdateInfo | None = None
+        self.ready_path: Path | None = None
+        self.percent = 0
         self.error = ""
         self._state = STATE_IDLE
         self._busy = threading.Lock()
+        self._check_failures = 0
+        self._download_attempts = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(lambda: self.check(False))
+        self._retry = QTimer(self)
+        self._retry.setSingleShot(True)
+        self._retry.timeout.connect(lambda: self.check(False))
         self._fetched.connect(self._on_fetched)
         self._downloaded.connect(self._on_downloaded)
+        self._progressed.connect(self._on_progress)
 
     # ------------------------------------------------------------------ état
     @property
@@ -327,7 +295,11 @@ class UpdateManager(QObject):
 
     @property
     def auto_install(self) -> bool:
-        return bool(self._cfg.get("update", {}).get("auto_install", True)) and self.self_update
+        return bool(self._section().get("auto_install", True)) and self.self_update
+
+    def _section(self) -> dict:
+        section = self._cfg.get("update")
+        return section if isinstance(section, dict) else {}
 
     def _set_state(self, state: str) -> None:
         if state != self._state:
@@ -336,18 +308,23 @@ class UpdateManager(QObject):
 
     def start(self) -> None:
         """Vérification au démarrage (un peu différée) puis régulière."""
-        section = self._cfg.get("update", {})
+        section = self._section()
         if not self.enabled or not section.get("check", True):
             return
         try:
-            hours = max(MIN_INTERVAL_H, float(section.get("interval_hours", 6)))
+            hours = max(MIN_INTERVAL_H, float(section.get("interval_hours", DEFAULT_INTERVAL_H)))
         except (TypeError, ValueError):
-            hours = 6.0
+            hours = DEFAULT_INTERVAL_H
+        try:
+            first = max(1.0, float(section.get("first_check_s", START_DELAY_S)))
+        except (TypeError, ValueError):
+            first = float(START_DELAY_S)
         self._timer.start(round(hours * 3_600_000))
-        QTimer.singleShot(START_DELAY_MS, lambda: self.check(False))
+        QTimer.singleShot(round(first * 1000), lambda: self.check(False))
 
     def stop(self) -> None:
         self._timer.stop()
+        self._retry.stop()
 
     # ---------------------------------------------------------- vérification
     def check(self, manual: bool = False) -> bool:
@@ -359,6 +336,7 @@ class UpdateManager(QObject):
             return False
         if not self._busy.acquire(blocking=False):
             return False
+        self._retry.stop()
         self._set_state(STATE_CHECKING)
 
         def work() -> None:
@@ -380,19 +358,26 @@ class UpdateManager(QObject):
 
     def _on_fetched(self, update: UpdateInfo | None, error: str, manual: bool) -> None:
         if update is None:
-            log.info("Vérification des mises à jour : %s", error)
             self.error = error
+            delay = CHECK_RETRY_MS[min(self._check_failures, len(CHECK_RETRY_MS) - 1)]
+            self._check_failures += 1
+            log.info("Vérification des mises à jour : %s (nouvel essai dans %d min)",
+                     error, delay // 60_000)
+            self._retry.start(delay)
             self._set_state(STATE_AVAILABLE if self.latest is not None else STATE_IDLE)
             self.checked.emit(None, error)
             return
         self.error = ""
-        skipped = "" if manual else str(self._cfg.get("update", {}).get("skipped_version") or "")
+        self._check_failures = 0
+        skipped = "" if manual else str(self._section().get("skipped_version") or "")
         if not is_newer(update, self.current_version, skipped):
             self._set_state(STATE_AVAILABLE if self.latest is not None else STATE_IDLE)
             self.checked.emit(None, "")
             return
         log.info("Mise à jour disponible : %s (en cours : %s)", update.version,
                  self.current_version)
+        if self.latest is None or self.latest.version != update.version:
+            self._download_attempts = 0
         self.latest = update
         self.checked.emit(update, "")
         if self.auto_install and not manual:
@@ -403,13 +388,26 @@ class UpdateManager(QObject):
 
     # ---------------------------------------------------------- téléchargement
     def download(self, update: UpdateInfo) -> None:
-        """Téléchargement silencieux, vérifié ; `ready` à la fin."""
+        """Téléchargement silencieux, vérifié, avec progression ; `ready` à la fin."""
+        self._download_attempts += 1
+        self.percent = 0
         self._set_state(STATE_DOWNLOADING)
+        self.progress.emit(0)
         dest = update_dir() / f"REKA-Taskbar-{update.version}.exe"
+        last = [-1]
+
+        def report(received: int, total: int) -> None:
+            percent = int(received * 100 / total) if total else 0
+            if percent != last[0]:          # un signal par pourcent, pas par bloc
+                last[0] = percent
+                try:
+                    self._progressed.emit(percent)
+                except RuntimeError:
+                    pass
 
         def work() -> None:
             try:
-                path, error = self._fetch_exe(update, dest), ""
+                path, error = self._fetch_exe(update, dest, report), ""
             except UpdateError as exc:
                 path, error = None, str(exc)
             except Exception as exc:
@@ -421,17 +419,32 @@ class UpdateManager(QObject):
 
         threading.Thread(target=work, name="update-download", daemon=True).start()
 
+    def _on_progress(self, percent: int) -> None:
+        if self._state == STATE_DOWNLOADING:
+            self.percent = percent
+            self.progress.emit(percent)
+
     def _on_downloaded(self, update: UpdateInfo, path: Path | None, error: str) -> None:
         if path is None:
             log.warning("Mise à jour non téléchargée : %s", error)
             self.fail(error)
+            if self.auto_install and self._download_attempts < DOWNLOAD_ATTEMPTS:
+                # Nouvel essai automatique ; en attendant, le bouton reste disponible
+                QTimer.singleShot(DOWNLOAD_RETRY_MS, lambda: self._retry_download(update))
             return
+        self.ready_path = Path(path)
+        self.percent = 100
         self._set_state(STATE_READY)
-        self.ready.emit(update, path)
+        self.ready.emit(update, self.ready_path)
+
+    def _retry_download(self, update: UpdateInfo) -> None:
+        if self.latest is update and self._state == STATE_AVAILABLE:
+            self.download(update)
 
     def fail(self, error: str) -> None:
         """L'installation automatique a échoué : on repasse au bouton « Mise à jour »."""
         self.error = error
+        self.ready_path = None
         self._set_state(STATE_AVAILABLE)
         if self.latest is not None:
             self.available.emit(self.latest)
@@ -440,4 +453,5 @@ class UpdateManager(QObject):
         """« Ignorer cette version » : plus proposée automatiquement."""
         self._cfg.setdefault("update", {})["skipped_version"] = update.version
         self.latest = None
+        self.ready_path = None
         self._set_state(STATE_IDLE)
