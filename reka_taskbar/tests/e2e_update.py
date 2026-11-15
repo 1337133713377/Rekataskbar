@@ -135,6 +135,9 @@ def run(mode: str) -> int:
             wait_for(lambda: not (work / "REKA-Taskbar.broken.exe").exists(),
                      "exe fautif non supprimé", timeout=90)
             print("Exe fautif supprimé : OK")
+        errors = read(log).count("Exception non g\u00e9r\u00e9e")
+        assert errors == 0, f"{errors} erreur(s) non gérée(s) dans le journal de l'exe"
+        print("Aucune erreur non gérée dans le journal : OK")
     except AssertionError as exc:
         print(f"ÉCHEC : {exc}")
         return 1

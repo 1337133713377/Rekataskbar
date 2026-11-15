@@ -134,6 +134,39 @@ def test_demo_windows():
 
 
 # --- ancrage ----------------------------------------------------------------------
+def test_every_winapi_name_used_exists():
+    """Chaque « winapi.X » du code existe dans core/winapi.py. Lu sans importer le
+    module (il ne se charge que sous Windows) : ce test tourne partout."""
+    import ast
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    tree = ast.parse((root / "core" / "winapi.py").read_text(encoding="utf-8"))
+    defined = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            defined.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name):
+                        defined.add(name.id)
+        elif isinstance(node, ast.Try):           # définitions selon la version de Windows
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                    defined.add(sub.id)
+    used = {}
+    for path in [root / "main.py", *root.glob("core/*.py"), *root.glob("ui/**/*.py")]:
+        for name in re.findall(r"\bwinapi\.([A-Za-z_]\w*)", path.read_text(encoding="utf-8")):
+            used.setdefault(name, path.name)
+    missing = {name: where for name, where in used.items() if name not in defined}
+    assert not missing, f"absents de core/winapi.py : {missing}"
+
+
 def test_covers_screen():
     screen = (0, 0, 1920, 1080)
     assert appbar.covers((0, 0, 1920, 1080), screen)                  # plein écran exact

@@ -1,5 +1,9 @@
 # Nouveautés de REKA Taskbar
 
+## 1.1.1
+
+- Correction : la vérification du plein écran (Ctrl+Échap, passage derrière les jeux) plantait à chaque seconde sous Windows et ne faisait rien. Elle fonctionne maintenant.
+
 ## 1.1.0
 
 - Mises à jour plus sûres : si une nouvelle version ne démarre pas, la barre revient toute seule à l'ancienne et ne réinstalle pas la version fautive.
