@@ -6,7 +6,7 @@ Une barre des tâches personnalisée pour Windows 10 / 11, avec des widgets d'us
 
 ## Ce qu'elle fait
 
-| Widget | Ce qu'il montre | Gestes |
+| Widget | Ce qu'il montre | Gestes  |
 |---|---|---|
 | **Démarrer** | le menu Démarrer de Windows | clic ; clic droit : Explorateur, Gestionnaire des tâches, verrouiller |
 | **Bouton REKA** | REKA ouverte ou non, Voicemeeter connecté ou non (pastille verte / ambre / grise) | clic : affiche la console, ou la lance si elle est fermée |
