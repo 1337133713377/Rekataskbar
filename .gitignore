@@ -7,3 +7,4 @@ dist/
 selftest/
 .pytest_cache/
 *.log
+reka_taskbar/build_info.json

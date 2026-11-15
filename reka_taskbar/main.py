@@ -11,6 +11,7 @@ Options :
   --selftest IMAGE    rend la barre en démo dans IMAGE puis quitte (vérif de build)
   --settings          ouvre les réglages au démarrage
   --restore-taskbar   rend la barre des tâches de Windows (si elle est restée cachée)
+  --restart           (après une mise à jour) attend la fin de l'instance précédente
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QLockFile, QtMsgType, qInstallMessageHandler
+from PySide6.QtCore import QLockFile, QtMsgType, QTimer, qInstallMessageHandler
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
@@ -32,6 +33,7 @@ from core import appbar, config
 from core.media import create_media_backend
 from core.reka_link import RekaLink
 from core.system import SystemMonitor
+from core.updater import UpdateManager, cleanup_previous, load_build_info
 from core.voicemeeter import VoicemeeterLink
 from core.weather import WeatherService
 from core.windows import create_window_backend
@@ -44,6 +46,8 @@ LOG_FORMAT = "%(asctime)s %(levelname)-7s [%(threadName)s] %(name)s : %(message)
 LOG_MAX_BYTES = 1024 * 1024
 LOG_BACKUPS = 2
 WINDOWS_APP_ID = "REKA.Taskbar"
+RESTART_WAIT_MS = 30_000      # --restart : l'instance précédente finit de se fermer
+OLD_EXE_RETRY_MS = 20_000     # ancien exe encore verrouillé : nouvel essai de suppression
 
 
 # --------------------------------------------------------------------------- #
@@ -131,8 +135,10 @@ class TaskbarApp:
             self.windows = create_window_backend()
             self.weather = WeatherService(str(weather_cfg.get("city") or ""),
                                           float(weather_cfg.get("refresh_min", 20) or 20))
+        # Démo : pas de mises à jour (aucun build_info)
+        self.updates = UpdateManager(cfg, None if demo else load_build_info())
         self.bar = TaskbarWindow(cfg, self.vm, self.reka, self.media, self.system, self.windows,
-                                 self.weather, persist=not demo)
+                                 self.weather, self.updates, persist=not demo)
         self.tray: QSystemTrayIcon | None = None
         self._stopped = False
 
@@ -142,6 +148,7 @@ class TaskbarApp:
         self.media.start()
         self.system.start()
         self.weather.start()
+        self.updates.start()
         self.bar.show()
         self.bar.dock()
 
@@ -155,6 +162,7 @@ class TaskbarApp:
         menu = QMenu()
         menu.addAction("Mini-console…", lambda: self.bar.open_mixer(None))
         menu.addAction("Réglages de la barre…", lambda: self.bar.open_settings(""))
+        menu.addAction("Rechercher les mises à jour…", self.bar.check_for_updates)
         menu.addSeparator()
         menu.addAction(f"Quitter {config.APP_NAME}", self.bar.quit)
         self.tray.setContextMenu(menu)
@@ -169,7 +177,7 @@ class TaskbarApp:
         self.bar.shutdown()
         if self.tray is not None:
             self.tray.hide()
-        for service in (self.weather, self.system, self.media, self.reka, self.vm):
+        for service in (self.updates, self.weather, self.system, self.media, self.reka, self.vm):
             try:
                 service.stop()
             except Exception:
@@ -313,6 +321,18 @@ def _selftest_system(report: list[str]) -> list[str]:
         from core import shell
         return f"{'activé' if shell.autostart_enabled() else 'désactivé'} ({shell.autostart_command()})"
 
+    def update_probe() -> str:
+        from core.updater import load_build_info, version_url
+        build = load_build_info()
+        if build is None:
+            if getattr(sys, "frozen", False):
+                raise RuntimeError("build_info.json absent de l'exe")
+            return "développement (pas de build_info.json)"
+        if build.version != config.APP_VERSION:
+            raise RuntimeError(f"build_info {build.version} ≠ version {config.APP_VERSION}")
+        return f"{build.version}, vérifie {version_url({}, build)}"
+
+    probe("Mises à jour", update_probe)
     probe("Fenêtres ouvertes (Win32)", windows_probe)
     probe("Écrans", monitors_probe)
     probe("Démarrage avec Windows", autostart_probe)
@@ -335,6 +355,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--settings", action="store_true", help="ouvre les réglages au démarrage")
     parser.add_argument("--restore-taskbar", action="store_true",
                         help="rend la barre des tâches de Windows puis quitte")
+    parser.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--updated-from", metavar="VERSION", default="", help=argparse.SUPPRESS)
     return parser.parse_args(argv[1:])
 
 
@@ -384,9 +406,14 @@ def main() -> int:
     appbar.restore_windows_taskbar_if_needed(config.app_data_dir())
 
     lock = QLockFile(str(config.app_data_dir() / "instance.lock"))
-    if not lock.tryLock(200):
+    if not lock.tryLock(RESTART_WAIT_MS if args.restart else 200):
         QMessageBox.information(None, config.APP_NAME, f"{config.APP_NAME} est déjà ouverte.")
         return 0
+    if args.restart:
+        cfg = config.load_config()      # relue : l'instance précédente l'a écrite en partant
+    # Après une mise à jour : l'ancien exe (encore verrouillé un instant) est supprimé
+    if not cleanup_previous():
+        QTimer.singleShot(OLD_EXE_RETRY_MS, cleanup_previous)
 
     try:
         taskbar = TaskbarApp(cfg)
@@ -401,6 +428,12 @@ def main() -> int:
     app.commitDataRequest.connect(lambda _manager: taskbar.bar.shutdown())   # fermeture de session
     taskbar.start()
     taskbar.add_tray_icon(icon)
+    if args.updated_from:
+        log.info("Mise à jour : %s → %s", args.updated_from, config.APP_VERSION)
+        if taskbar.tray is not None:
+            taskbar.tray.showMessage(config.APP_NAME,
+                                     f"Mise à jour installée : version {config.APP_VERSION}.",
+                                     icon, 5000)
     if args.settings:
         taskbar.bar.open_settings("")
     exit_code = app.exec()

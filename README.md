@@ -58,8 +58,8 @@ Avec « Reprendre le thème et les couleurs de REKA » (activé par défaut), la
 
 ## Démarrer
 
-1. Récupère `REKA-Taskbar.exe` : onglet **Actions** du dépôt → dernière exécution réussie de *Build Windows* → artefact **REKA-Taskbar** (ou la dernière *release* quand un tag `v…` a été poussé).
-2. Lance-le : rien à installer. La barre se place en haut de l'écran ; la barre des tâches de Windows reste en bas.
+1. [Télécharge `REKA-Taskbar.exe`](https://github.com/1337133713377/Rekataskbar/releases/latest/download/REKA-Taskbar.exe) (dernière version, page [Releases](https://github.com/1337133713377/Rekataskbar/releases)).
+2. Mets-le dans un dossier à toi (Documents, Bureau…, pas `Program Files` : la barre doit pouvoir remplacer son exe pour se mettre à jour), puis lance-le : rien à installer. La barre se place en haut de l'écran ; la barre des tâches de Windows reste en bas.
 3. Clic droit sur la barre → **Réglages de la barre…** pour la position, les widgets, la météo, le raccourci du micro et le démarrage avec Windows.
 
 Pour voir la barre sans Voicemeeter ni REKA : `REKA-Taskbar.exe --demo`.
@@ -67,11 +67,19 @@ Pour voir la barre sans Voicemeeter ni REKA : `REKA-Taskbar.exe --demo`.
 > [!NOTE]
 > L'exe n'est pas signé : au premier lancement, Windows SmartScreen demande confirmation (**Informations complémentaires** → **Exécuter quand même**), comme pour REKA.
 
+## Mises à jour automatiques
+
+La barre vérifie s'il existe une nouvelle version au démarrage, puis toutes les 6 heures. Quand c'est le cas, elle la télécharge en arrière-plan, vérifie son empreinte, remplace son exe et redémarre dessus en une seconde ou deux ; une bulle près de l'horloge annonce la nouvelle version. Tes réglages sont conservés. Si tu es en train de te servir de la barre (menu, réglages, mini-console), elle attend que tu aies fini.
+
+Dans **Réglages → Barre**, tu peux couper l'installation automatique : un bouton **Mise à jour** apparaît alors dans la barre quand une version est prête, avec ses nouveautés. Le même bouton apparaît si l'exe est dans un dossier où il ne peut pas se remplacer. **Clic droit → Rechercher les mises à jour…** vérifie tout de suite.
+
+Les nouveautés de chaque version sont dans [NOUVEAUTES.md](reka_taskbar/NOUVEAUTES.md).
+
 ## Réglages
 
 | Onglet | Réglages |
 |---|---|
-| **Barre** | en haut ou en bas, hauteur, écran, opacité, place réservée (les fenêtres agrandies s'arrêtent à la barre), passage derrière les jeux en plein écran, masquage de la barre de Windows, démarrage avec Windows |
+| **Barre** | en haut ou en bas, hauteur, écran, opacité, place réservée (les fenêtres agrandies s'arrêtent à la barre), passage derrière les jeux en plein écran, masquage de la barre de Windows, démarrage avec Windows, mises à jour automatiques |
 | **Widgets** | zone et ordre de chaque widget (glisser-déposer), secondes et date de l'horloge, titres des fenêtres, ville de la météo |
 | **REKA** | état du lien, thème, canal du micro, raccourci « couper le micro », emplacement de `REKA.exe` |
 | **Raccourcis** | programmes, dossiers et fichiers du widget Raccourcis |
@@ -107,11 +115,21 @@ Même base que REKA : Python 3.11+, PySide6, PyInstaller. Voicemeeter est pilot�
 | `core/voicemeeter.py` | API Remote de Voicemeeter et thread de scrutation |
 | `core/windows.py`, `core/appbar.py`, `core/winapi.py` | fenêtres ouvertes, ancrage de la barre, barre de Windows |
 | `core/media.py`, `core/system.py`, `core/weather.py`, `core/shell.py` | musique, système, météo, services de Windows |
+| `core/updater.py`, `ui/update_dialog.py` | mises à jour automatiques |
 | `core/demo.py` | moteurs simulés (`--demo`, `--selftest`, tests) |
 | `ui/bar.py`, `ui/widgets/` | la barre et ses widgets |
 | `ui/mixer_popup.py`, `ui/settings_dialog.py` | mini-console, réglages |
 
 Chaque push lance les tests sous Linux puis sous Windows (dont les appels Win32 réels), construit l'exe et lui fait passer son auto-test (`--selftest`).
+
+**Publier une version** : augmente `APP_VERSION` dans `reka_taskbar/core/config.py`, ajoute sa section dans `reka_taskbar/NOUVEAUTES.md`, puis pousse le tag correspondant :
+
+```bash
+git tag -a v1.0.1 -m "REKA Taskbar 1.0.1"
+git push origin v1.0.1
+```
+
+Le build publie alors la release avec `REKA-Taskbar.exe` et son `version.json` (version, taille, SHA-256, nouveautés). Les barres installées lisent celui de la dernière release et se mettent à jour. Un tag qui ne correspond pas à `APP_VERSION` fait échouer le build.
 
 ---
 

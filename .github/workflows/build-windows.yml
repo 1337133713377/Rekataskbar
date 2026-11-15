@@ -1,6 +1,9 @@
 # Teste REKA Taskbar puis construit « REKA-Taskbar.exe » sur une machine
-# Windows de GitHub à chaque push. L'exe est joint à l'exécution (artefact) ;
-# pousser un tag « v… » publie en plus une release téléchargeable.
+# Windows de GitHub à chaque push. L'exe est joint à l'exécution (artefact).
+#
+# Pousser un tag « v1.2.3 » (égal à APP_VERSION de core/config.py) publie une
+# release avec l'exe et son version.json : les barres déjà installées lisent
+# celui de la dernière release et se mettent à jour toutes seules.
 name: Build Windows
 
 on:
@@ -67,6 +70,19 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: python -m pytest -q -rs tests/test_win32.py
+      - name: Infos du build (mises à jour automatiques)
+        run: |
+          python - <<'PY'
+          import json, os, re, sys
+          source = open("core/config.py", encoding="utf-8").read()
+          version = re.search(r'^APP_VERSION = "([^"]+)"', source, re.M).group(1)
+          if os.environ["GITHUB_REF_TYPE"] == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{version}":
+              sys.exit(f"Le tag {os.environ['GITHUB_REF_NAME']} ne correspond pas à APP_VERSION {version}")
+          info = {"version": version, "repo": os.environ["GITHUB_REPOSITORY"],
+                  "commit": os.environ["GITHUB_SHA"]}
+          json.dump(info, open("build_info.json", "w", encoding="utf-8"), indent=2)
+          print(info)
+          PY
       - name: Build PyInstaller
         run: python -m PyInstaller --noconfirm --clean build.spec
       - name: Propriétés de l'exe (version, développeurs)
@@ -92,12 +108,71 @@ jobs:
           mkdir -p selftest/ecran "$APPDATA"
           "./dist/REKA-Taskbar.exe" --selftest "$(pwd -W)/selftest/ecran/barre.png"
           cat selftest/ecran/barre.txt
+      - name: Remplacement de l'exe pendant qu'il tourne (mise à jour)
+        env:
+          APPDATA: ${{ runner.temp }}/appdata-maj
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p "$APPDATA"
+          python - <<'PY'
+          import os, shutil, subprocess, sys, tempfile, time
+          from pathlib import Path
+          sys.path.insert(0, ".")
+          from core.updater import cleanup_previous, install, old_exe_path
+
+          folder = Path(tempfile.mkdtemp())
+          running = folder / "REKA-Taskbar.exe"
+          shutil.copy("dist/REKA-Taskbar.exe", running)
+          new = folder / "nouveau.exe"
+          shutil.copy("dist/REKA-Taskbar.exe", new)
+          with open(new, "ab") as f:
+              f.write(b"nouvelle version")          # pour reconnaître le nouvel exe
+          process = subprocess.Popen([str(running), "--demo"])
+          time.sleep(8)
+          assert process.poll() is None, "la barre en démo s'est arrêtée"
+          install(new, running)                      # pendant qu'elle tourne
+          assert running.read_bytes().endswith(b"nouvelle version"), "nouvel exe absent"
+          assert old_exe_path(running).is_file(), "ancien exe absent"
+          print("Exe remplacé pendant qu'il tourne : OK")
+          process.terminate()
+          process.wait(30)
+          for _ in range(20):
+              if cleanup_previous(running):
+                  break
+              time.sleep(0.5)
+          assert not old_exe_path(running).exists(), "ancien exe non supprimé"
+          print("Ancien exe supprimé après l'arrêt : OK")
+          PY
+      - name: Description de la mise à jour (version.json) et notes de version
+        run: |
+          python - <<'PY'
+          import datetime, hashlib, json, os, re
+          info = json.load(open("build_info.json", encoding="utf-8"))
+          data = open("dist/REKA-Taskbar.exe", "rb").read()
+          # Notes de cette version : sa section de NOUVEAUTES.md
+          text = open("NOUVEAUTES.md", encoding="utf-8").read()
+          match = re.search(rf"^## {re.escape(info['version'])}\b.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+          notes = match.group(1).strip() if match else ""
+          open("dist/notes.md", "w", encoding="utf-8").write(notes or f"REKA Taskbar {info['version']}")
+          short = "\n".join("• " + line.strip().lstrip("-* ").strip() for line in notes.splitlines()
+                            if line.strip().startswith(("-", "*")))
+          if len(short) > 900:
+              short = short[:900].rsplit("\n", 1)[0] + "\n…"
+          tag = os.environ["GITHUB_REF_NAME"] if os.environ["GITHUB_REF_TYPE"] == "tag" else "v" + info["version"]
+          update = {"version": info["version"], "commit": info["commit"],
+                    "url": f"https://github.com/{info['repo']}/releases/download/{tag}/REKA-Taskbar.exe",
+                    "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "notes": short,
+                    "published": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
+          json.dump(update, open("dist/version.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          print(json.dumps(update, ensure_ascii=False, indent=2))
+          PY
       - name: Artefact
         uses: actions/upload-artifact@v4
         with:
           name: REKA-Taskbar
           path: |
             reka_taskbar/dist/REKA-Taskbar.exe
+            reka_taskbar/dist/version.json
             reka_taskbar/selftest/
       - name: Release numérotée (tag « v… »)
         if: github.event_name == 'push' && github.ref_type == 'tag'
@@ -105,7 +180,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete "$GITHUB_REF_NAME" --yes || true
-          gh release create "$GITHUB_REF_NAME" dist/REKA-Taskbar.exe selftest/barre.png \
+          {
+            cat dist/notes.md
+            printf '\n\n---\n\nTélécharge **REKA-Taskbar.exe** et lance-le : rien à installer. '
+            printf 'Les barres déjà installées se mettent à jour toutes seules.\n'
+            printf 'Pour voir la barre sans Voicemeeter ni REKA : `REKA-Taskbar.exe --demo`.\n'
+          } > dist/release-notes.md
+          gh release create "$GITHUB_REF_NAME" dist/REKA-Taskbar.exe dist/version.json selftest/barre.png \
             --verify-tag --latest \
             --title "REKA Taskbar $GITHUB_REF_NAME" \
-            --notes "Télécharge **REKA-Taskbar.exe** et lance-le : rien à installer. Pour voir la barre sans Voicemeeter ni REKA : \`REKA-Taskbar.exe --demo\`."
+            --notes-file dist/release-notes.md

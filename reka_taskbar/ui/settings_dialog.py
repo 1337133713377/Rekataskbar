@@ -42,11 +42,14 @@ def _heading(text: str) -> QLabel:
 class SettingsDialog(QDialog):
     applied = Signal()
 
-    def __init__(self, cfg: dict, reka, vm, parent: QWidget | None = None) -> None:
+    check_updates = Signal()      # « Rechercher maintenant »
+
+    def __init__(self, cfg: dict, reka, vm, updates=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._cfg = cfg
         self._reka = reka
         self._vm = vm
+        self._updates = updates
         self.setWindowTitle(f"Réglages — {config.APP_NAME}")
         self.setMinimumSize(760, 540)
 
@@ -140,6 +143,22 @@ class SettingsDialog(QDialog):
         self.autostart = QCheckBox("Lancer REKA Taskbar au démarrage de Windows")
         self.autostart.setChecked(shell.autostart_enabled())
         form.addRow(self.autostart)
+
+        update = self._cfg.get("update", {})
+        self.auto_update = QCheckBox("Installer les mises à jour automatiquement")
+        self.auto_update.setChecked(bool(update.get("auto_install", True)))
+        check = QPushButton("Rechercher maintenant")
+        check.clicked.connect(self.check_updates)
+        row = QHBoxLayout()
+        row.addWidget(self.auto_update)
+        row.addStretch(1)
+        row.addWidget(check)
+        form.addRow(row)
+        current = self._updates.current_version if self._updates is not None else config.APP_VERSION
+        form.addRow(_note(
+            f"Version installée : {current}. La barre vérifie les nouvelles versions au "
+            "démarrage puis toutes les 6 heures ; sans installation automatique, un bouton "
+            "« Mise à jour » apparaît dans la barre."))
         return page
 
     # ---------------------------------------------------------------- widgets
@@ -349,6 +368,7 @@ class SettingsDialog(QDialog):
         cfg["shortcuts"] = [self.shortcuts.item(row).data(KEY_ROLE)
                             for row in range(self.shortcuts.count())]
 
+        cfg.setdefault("update", {})["auto_install"] = self.auto_update.isChecked()
         if self.autostart.isChecked() != shell.autostart_enabled():
             shell.set_autostart(self.autostart.isChecked())
         self.applied.emit()

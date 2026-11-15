@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QGridLayout, QMenu,
                                QMessageBox, QSizePolicy, QWidget)
 
-from core import appbar, config, shell
+from core import appbar, config, shell, updater
 from core.reka_link import REKA_DOWNLOAD_URL, RekaSetup
 from ui import styles
 from ui.mixer_popup import MixerPopup
@@ -27,6 +28,7 @@ from ui.widgets.general import (BatteryWidget, ClockWidget, MediaWidget, Network
                                 ShortcutsWidget, StartWidget, SystemWidget, WeatherWidget)
 from ui.widgets.reka import HeadphoneWidget, MicWidget, RekaWidget, StripsWidget, mic_strip
 from ui.widgets.tasks import TasksWidget
+from ui.widgets.update import UpdateWidget
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +88,7 @@ def bar_geometry(screen: QRect, edge: str, height: int) -> QRect:
 
 
 class TaskbarWindow(QWidget):
-    def __init__(self, cfg: dict, vm, reka, media, system, windows, weather,
+    def __init__(self, cfg: dict, vm, reka, media, system, windows, weather, updates,
                  persist: bool = True) -> None:
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
                          | Qt.WindowType.WindowStaysOnTopHint
@@ -96,11 +98,17 @@ class TaskbarWindow(QWidget):
         self.setWindowTitle(config.APP_NAME)
         self._cfg = cfg
         self._persist = persist            # False : démo et tests, rien n'est écrit ni réservé
-        self._vm, self._reka = vm, reka
+        self._vm, self._reka, self._updates = vm, reka, updates
         self.ctx = Context(cfg=cfg, vm=vm, reka=reka, media=media, system=system,
-                           windows=windows, weather=weather, save=self.save,
+                           windows=windows, weather=weather, updates=updates, save=self.save,
                            open_settings=self.open_settings, open_mixer=self.open_mixer,
-                           open_reka=self.open_reka, quit=self.quit)
+                           open_reka=self.open_reka, open_update=self.open_update,
+                           quit=self.quit)
+        # Installation d'une mise à jour (remplaçables dans les tests)
+        self.install_update = updater.install
+        self.restart_after_update = updater.launch_restart
+        self.executable = Path(sys.executable)
+        self.update_widget: UpdateWidget | None = None
         self.widgets: dict[str, QWidget] = {}
         self._zones: dict[str, QWidget] = {}
         self._mixer: MixerPopup | None = None
@@ -129,6 +137,7 @@ class TaskbarWindow(QWidget):
         self._rehide.timeout.connect(self._keep_windows_taskbar_hidden)
 
         reka.setup_changed.connect(self._on_reka_setup)
+        updates.ready.connect(self.install_ready_update)
         self.apply_theme()
         self.build_widgets()
         for screen_signal in (QGuiApplication.instance().screenAdded,
@@ -139,10 +148,12 @@ class TaskbarWindow(QWidget):
     # ---------------------------------------------------------------- widgets
     def build_widgets(self) -> None:
         """(Re)construit les widgets d'après la config (layout)."""
-        for widget in self.widgets.values():
-            widget.setParent(None)
-            widget.deleteLater()
+        for widget in [*self.widgets.values(), self.update_widget]:
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
         self.widgets = {}
+        self.update_widget = None
         layout = normalized_layout(self._cfg)
         for zone, holder in self._zones.items():
             row = holder.layout()
@@ -151,6 +162,9 @@ class TaskbarWindow(QWidget):
             expanding = False
             if zone == "right":
                 row.addStretch(1)
+                # « Mise à jour » : hors disposition, visible seulement quand il sert
+                self.update_widget = UpdateWidget(self.ctx, holder)
+                row.addWidget(self.update_widget)
             for key in layout[zone]:
                 try:
                     widget = WIDGETS[key][1](self.ctx, holder)
@@ -344,8 +358,9 @@ class TaskbarWindow(QWidget):
         from ui.settings_dialog import SettingsDialog
 
         if self._settings is None:
-            self._settings = SettingsDialog(self._cfg, self._reka, self._vm)
+            self._settings = SettingsDialog(self._cfg, self._reka, self._vm, self._updates)
             self._settings.applied.connect(self._on_settings_applied)
+            self._settings.check_updates.connect(self.check_for_updates)
             self._settings.finished.connect(lambda *_a: setattr(self, "_settings", None))
             self._settings.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._settings.select_tab(tab)
@@ -378,6 +393,76 @@ class TaskbarWindow(QWidget):
                 self._reka.launch()
         elif box.clickedButton() is download:
             QDesktopServices.openUrl(QUrl(REKA_DOWNLOAD_URL))
+
+    # ------------------------------------------------------------ mises à jour
+    def open_update(self) -> None:
+        """Fenêtre « Mise à jour disponible » (installation à la main)."""
+        from ui.update_dialog import UpdateDialog
+
+        update = self._updates.latest
+        if update is None:
+            return
+        dialog = UpdateDialog(update, self._updates.current_version, self._updates.self_update,
+                              self._updates.error)
+        dialog.exec()
+        if dialog.skipped:
+            self._updates.skip(update)
+            self.save()
+        elif dialog.installed:
+            self._restart_on_new_exe()
+
+    def check_for_updates(self) -> None:
+        """« Rechercher les mises à jour » : le résultat est toujours annoncé."""
+        updates = self._updates
+        if not updates.enabled:
+            QMessageBox.information(None, config.APP_NAME,
+                                    "Les mises à jour ne sont vérifiées que dans "
+                                    "REKA-Taskbar.exe (pas en développement).")
+            return
+
+        def answer(update, error: str) -> None:
+            updates.checked.disconnect(answer)
+            if update is not None:
+                self.open_update()
+            elif error:
+                QMessageBox.warning(None, config.APP_NAME, f"Vérification impossible :\n{error}")
+            else:
+                QMessageBox.information(None, config.APP_NAME,
+                                        f"Tu as la dernière version ({updates.current_version}).")
+
+        updates.checked.connect(answer)
+        if not updates.check(manual=True):
+            updates.checked.disconnect(answer)
+            if updates.latest is not None:
+                self.open_update()
+
+    def is_busy(self) -> bool:
+        """L'utilisateur est-il en train de se servir de la barre (menu, réglages,
+        mini-console, boîte de dialogue) ? On ne redémarre pas sous ses doigts."""
+        app = QApplication.instance()
+        return bool(self._settings is not None or self._mixer is not None
+                    or app.activePopupWidget() is not None or app.activeModalWidget() is not None)
+
+    def install_ready_update(self, update, path) -> None:
+        """Mise à jour téléchargée et vérifiée : installation, puis redémarrage."""
+        if self.is_busy():
+            QTimer.singleShot(updater.BUSY_RETRY_MS, lambda: self.install_ready_update(update, path))
+            return
+        try:
+            self.install_update(Path(path), self.executable)
+        except updater.UpdateError as exc:
+            log.warning("Mise à jour automatique non installée : %s", exc)
+            self._updates.fail(str(exc))        # le bouton « Mise à jour » prend le relais
+            return
+        log.info("Mise à jour %s installée : redémarrage.", update.version)
+        self._restart_on_new_exe()
+
+    def _restart_on_new_exe(self) -> None:
+        if self.restart_after_update(self._updates.current_version):
+            self.quit()
+        else:
+            QMessageBox.information(None, config.APP_NAME,
+                                    "La mise à jour est installée : relance REKA Taskbar.")
 
     def quit(self) -> None:
         QApplication.instance().quit()
@@ -429,6 +514,11 @@ class TaskbarWindow(QWidget):
             menu.addSeparator()
         menu.addAction("Mini-console…", lambda: self.open_mixer(None))
         menu.addAction("Réglages de la barre…", lambda: self.open_settings(""))
+        if self._updates.latest is not None and self._updates.state == updater.STATE_AVAILABLE:
+            menu.addAction(f"Installer la version {self._updates.latest.version}…",
+                           self.open_update)
+        else:
+            menu.addAction("Rechercher les mises à jour…", self.check_for_updates)
         if sys.platform == "win32" and self._persist:
             hidden = bool(self._cfg.get("bar", {}).get("hide_windows_taskbar", False))
             menu.addAction("Afficher la barre des tâches de Windows" if hidden

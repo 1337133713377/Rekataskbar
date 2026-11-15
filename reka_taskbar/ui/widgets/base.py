@@ -36,10 +36,12 @@ class Context:
     system: object            # core.system.SystemMonitor
     windows: object           # core.windows.WindowBackend
     weather: object           # core.weather.WeatherService
+    updates: object           # core.updater.UpdateManager
     save: Callable[[], None]
     open_settings: Callable[[str], None]
     open_mixer: Callable[[QWidget], None]
     open_reka: Callable[[], None]
+    open_update: Callable[[], None]
     quit: Callable[[], None]
 
     def widget_cfg(self, key: str) -> dict:

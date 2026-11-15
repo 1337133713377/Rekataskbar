@@ -64,7 +64,10 @@ a = Analysis(
     pathex=[],
     binaries=WINRT_BINARIES,
     # Ressources lues à l'exécution via core.config.resource_path()
-    datas=[("config.json", "."), ("assets", "assets")],
+    datas=[("config.json", "."), ("assets", "assets"),
+           # Version et dépôt (écrit par le build GitHub) : mises à jour automatiques
+           *([("build_info.json", ".")]
+             if os.path.isfile(os.path.join(SPECPATH, "build_info.json")) else [])],
     # Importés à l'intérieur de fonctions : on les déclare explicitement
     hiddenimports=["core.demo", "core.winapi", "ui.settings_dialog", "psutil", *WINRT_MODULES],
     hookspath=[],
