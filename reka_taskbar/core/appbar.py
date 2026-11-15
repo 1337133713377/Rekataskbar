@@ -102,6 +102,7 @@ class AppBar:
         self._hwnd = int(hwnd)
         self._registered = False
         self.callback_message = 0
+        self.explorer_restarted_message = 0     # « TaskbarCreated » : l'Explorateur a redémarré
         self.supported = sys.platform == "win32"
         if self.supported:
             from core import winapi
@@ -109,6 +110,8 @@ class AppBar:
             self._api = winapi
             self.callback_message = int(
                 winapi.user32.RegisterWindowMessageW(CALLBACK_MESSAGE_NAME))
+            self.explorer_restarted_message = int(
+                winapi.user32.RegisterWindowMessageW("TaskbarCreated"))
 
     @property
     def registered(self) -> bool:
@@ -158,6 +161,11 @@ class AppBar:
         api.user32.SetWindowPos(self._hwnd, api.HWND_TOPMOST, rect[0], rect[1],
                                 rect[2] - rect[0], rect[3] - rect[1], api.SWP_NOACTIVATE)
         return rect
+
+    def forget_registration(self) -> None:
+        """L'Explorateur de Windows a redémarré : il a oublié la réservation,
+        le prochain dock() la refait."""
+        self._registered = False
 
     def remove(self) -> None:
         """Rend la bande d'écran à Windows."""

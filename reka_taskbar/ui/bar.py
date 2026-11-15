@@ -305,6 +305,13 @@ class TaskbarWindow(QWidget):
                 if self._appbar is not None and msg.message == self._appbar.callback_message:
                     self._on_appbar_event(int(msg.wParam), int(msg.lParam))
                     return True, 0
+                if (self._appbar is not None
+                        and msg.message == self._appbar.explorer_restarted_message):
+                    # L'Explorateur a redémarré : place à réserver de nouveau, et sa
+                    # barre des tâches (toute neuve) à recacher si c'était demandé
+                    self._appbar.forget_registration()
+                    self._taskbar_hidden = False
+                    QTimer.singleShot(1500, self._after_show)
             except Exception:      # un message illisible ne doit jamais faire tomber la barre
                 log.debug("Message Windows ignoré", exc_info=True)
         return False, 0
