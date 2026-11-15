@@ -1,0 +1,50 @@
+{
+  "log_level": "INFO",
+  "bar": {
+    "edge": "top",
+    "height": 44,
+    "screen": "",
+    "reserve_space": true,
+    "hide_windows_taskbar": false,
+    "hide_on_fullscreen": true
+  },
+  "appearance": {
+    "follow_reka": true,
+    "theme": "studio",
+    "opacity": 1.0
+  },
+  "layout": {
+    "left": ["start", "reka", "shortcuts", "tasks"],
+    "center": ["media"],
+    "right": ["strips", "mic", "headphone", "system", "weather", "battery", "clock"]
+  },
+  "widgets": {
+    "clock": {
+      "seconds": false,
+      "date": true
+    },
+    "tasks": {
+      "labels": false
+    },
+    "system": {
+      "interval_s": 1.5
+    },
+    "weather": {
+      "city": "",
+      "refresh_min": 20
+    },
+    "mic": {
+      "strip": -1,
+      "hotkey": ""
+    },
+    "strips": {
+      "gain_step_db": 1.0
+    }
+  },
+  "shortcuts": [],
+  "reka": {
+    "config_path": "",
+    "exe_path": "",
+    "poll_hz": 20
+  }
+}
