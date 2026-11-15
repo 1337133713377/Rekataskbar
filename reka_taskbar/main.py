@@ -47,7 +47,8 @@ LOG_MAX_BYTES = 1024 * 1024
 LOG_BACKUPS = 2
 WINDOWS_APP_ID = "REKA.Taskbar"
 RESTART_WAIT_MS = 30_000      # --restart : l'instance précédente finit de se fermer
-OLD_EXE_RETRY_MS = 20_000     # ancien exe encore verrouillé : nouvel essai de suppression
+OLD_EXE_RETRY_MS = 10_000     # ancien exe encore verrouillé : nouvel essai de suppression
+OLD_EXE_RETRIES = 6
 
 
 # --------------------------------------------------------------------------- #
@@ -101,6 +102,13 @@ def set_windows_app_id() -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
     except (AttributeError, OSError) as exc:
         log.debug("AppUserModelID non défini : %s", exc)
+
+
+def retry_cleanup(attempts: int) -> None:
+    """Supprime l'ancien exe d'une mise à jour ; tant que l'instance précédente
+    le tient encore, nouvel essai un peu plus tard (puis au prochain lancement)."""
+    if not cleanup_previous() and attempts > 1:
+        QTimer.singleShot(OLD_EXE_RETRY_MS, lambda: retry_cleanup(attempts - 1))
 
 
 # --------------------------------------------------------------------------- #
@@ -412,8 +420,7 @@ def main() -> int:
     if args.restart:
         cfg = config.load_config()      # relue : l'instance précédente l'a écrite en partant
     # Après une mise à jour : l'ancien exe (encore verrouillé un instant) est supprimé
-    if not cleanup_previous():
-        QTimer.singleShot(OLD_EXE_RETRY_MS, cleanup_previous)
+    retry_cleanup(OLD_EXE_RETRIES)
 
     try:
         taskbar = TaskbarApp(cfg)

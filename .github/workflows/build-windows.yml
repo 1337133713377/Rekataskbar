@@ -134,7 +134,8 @@ jobs:
           assert running.read_bytes().endswith(b"nouvelle version"), "nouvel exe absent"
           assert old_exe_path(running).is_file(), "ancien exe absent"
           print("Exe remplacé pendant qu'il tourne : OK")
-          process.terminate()
+          # L'exe PyInstaller lance un second processus : on arrête tout l'arbre
+          subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], check=False)
           process.wait(30)
           for _ in range(20):
               if cleanup_previous(running):
