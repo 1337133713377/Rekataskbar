@@ -122,14 +122,11 @@ Même base que REKA : Python 3.11+, PySide6, PyInstaller. Voicemeeter est pilot�
 
 Chaque push lance les tests sous Linux puis sous Windows (dont les appels Win32 réels), construit l'exe et lui fait passer son auto-test (`--selftest`).
 
-**Publier une version** : augmente `APP_VERSION` dans `reka_taskbar/core/config.py`, ajoute sa section dans `reka_taskbar/NOUVEAUTES.md`, puis pousse le tag correspondant :
+**Publier une version** : augmente `APP_VERSION` dans `reka_taskbar/core/config.py` et ajoute sa section dans `reka_taskbar/NOUVEAUTES.md`. Puis, sur GitHub, **Releases → Draft a new release**, choisis un tag (de préférence `v` + la version, par exemple `v1.0.1`) et publie.
 
-```bash
-git tag -a v1.0.1 -m "REKA Taskbar 1.0.1"
-git push origin v1.0.1
-```
+Le build se lance tout seul (environ 4 minutes) et ajoute à la release `REKA-Taskbar.exe` et son `version.json` (version, taille, SHA-256, nouveautés). Les barres installées lisent celui de la dernière release et se mettent à jour. Si une release est restée sans exe : **Actions → Build Windows → Run workflow**, avec son tag dans « release_tag ».
 
-Le build publie alors la release avec `REKA-Taskbar.exe` et son `version.json` (version, taille, SHA-256, nouveautés). Les barres installées lisent celui de la dernière release et se mettent à jour. Un tag qui ne correspond pas à `APP_VERSION` fait échouer le build.
+La version de l'exe est toujours `APP_VERSION` : n'oublie pas de l'augmenter, sinon les barres installées ne verront rien de nouveau.
 
 ---
 

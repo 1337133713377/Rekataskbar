@@ -1,19 +1,32 @@
 # Teste REKA Taskbar puis construit « REKA-Taskbar.exe » sur une machine
 # Windows de GitHub à chaque push. L'exe est joint à l'exécution (artefact).
 #
-# Pousser un tag « v1.2.3 » (égal à APP_VERSION de core/config.py) publie une
-# release avec l'exe et son version.json : les barres déjà installées lisent
-# celui de la dernière release et se mettent à jour toutes seules.
+# Publier une release sur GitHub (quel que soit le nom de son tag), ou pousser
+# un tag « v1.2.3 », y ajoute l'exe et son version.json : les barres déjà
+# installées lisent celui de la dernière release et se mettent à jour toutes
+# seules. La version vient d'APP_VERSION (core/config.py), pas du tag.
+# « Run workflow » avec un tag de release existante y ajoute l'exe à la main.
 name: Build Windows
 
 on:
   push:
     branches: ["**"]
     tags: ["v*"]
-    paths:
+    paths:                # (ne filtre que les pushs de branches)
       - "reka_taskbar/**"
       - ".github/workflows/build-windows.yml"
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag d'une release existante à compléter avec l'exe (vide : simple build)"
+        required: false
+        default: ""
+
+env:
+  # Release à remplir : celle qui vient d'être publiée, le tag poussé, ou celle demandée
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
 
 permissions:
   contents: read
@@ -76,8 +89,9 @@ jobs:
           import json, os, re, sys
           source = open("core/config.py", encoding="utf-8").read()
           version = re.search(r'^APP_VERSION = "([^"]+)"', source, re.M).group(1)
-          if os.environ["GITHUB_REF_TYPE"] == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{version}":
-              sys.exit(f"Le tag {os.environ['GITHUB_REF_NAME']} ne correspond pas à APP_VERSION {version}")
+          tag = os.environ.get("RELEASE_TAG", "")
+          if tag and tag.lstrip("vV") != version:
+              print(f"::warning::Release « {tag} » : l'exe sera la version {version} (APP_VERSION)")
           info = {"version": version, "repo": os.environ["GITHUB_REPOSITORY"],
                   "commit": os.environ["GITHUB_SHA"]}
           json.dump(info, open("build_info.json", "w", encoding="utf-8"), indent=2)
@@ -159,7 +173,7 @@ jobs:
                             if line.strip().startswith(("-", "*")))
           if len(short) > 900:
               short = short[:900].rsplit("\n", 1)[0] + "\n…"
-          tag = os.environ["GITHUB_REF_NAME"] if os.environ["GITHUB_REF_TYPE"] == "tag" else "v" + info["version"]
+          tag = os.environ.get("RELEASE_TAG") or "v" + info["version"]
           update = {"version": info["version"], "commit": info["commit"],
                     "url": f"https://github.com/{info['repo']}/releases/download/{tag}/REKA-Taskbar.exe",
                     "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "notes": short,
@@ -175,19 +189,52 @@ jobs:
             reka_taskbar/dist/REKA-Taskbar.exe
             reka_taskbar/dist/version.json
             reka_taskbar/selftest/
-      - name: Release numérotée (tag « v… »)
-        if: github.event_name == 'push' && github.ref_type == 'tag'
+      - name: Release (exe, version.json, notes)
+        if: env.RELEASE_TAG != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete "$GITHUB_REF_NAME" --yes || true
           {
             cat dist/notes.md
             printf '\n\n---\n\nTélécharge **REKA-Taskbar.exe** et lance-le : rien à installer. '
             printf 'Les barres déjà installées se mettent à jour toutes seules.\n'
             printf 'Pour voir la barre sans Voicemeeter ni REKA : `REKA-Taskbar.exe --demo`.\n'
           } > dist/release-notes.md
-          gh release create "$GITHUB_REF_NAME" dist/REKA-Taskbar.exe dist/version.json selftest/barre.png \
-            --verify-tag --latest \
-            --title "REKA Taskbar $GITHUB_REF_NAME" \
-            --notes-file dist/release-notes.md
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # Release créée sur GitHub : on y ajoute les fichiers, sans toucher à ce qui y est écrit
+            gh release upload "$RELEASE_TAG" dist/REKA-Taskbar.exe dist/version.json --clobber
+            body=$(gh release view "$RELEASE_TAG" --json body --jq .body)
+            if [ -z "${body//[[:space:]]/}" ]; then
+              gh release edit "$RELEASE_TAG" --notes-file dist/release-notes.md
+            fi
+          else
+            gh release create "$RELEASE_TAG" dist/REKA-Taskbar.exe dist/version.json \
+              --verify-tag --latest \
+              --title "REKA Taskbar $RELEASE_TAG" \
+              --notes-file dist/release-notes.md
+          fi
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'
+      - name: La release est bien celle que lisent les barres installées
+        if: env.RELEASE_TAG != ''
+        run: |
+          # releases/latest/download/version.json doit mener à cet exe
+          python - <<'PY'
+          import json, time, urllib.request
+          info = json.load(open("build_info.json", encoding="utf-8"))
+          local = json.load(open("dist/version.json", encoding="utf-8"))
+          url = f"https://github.com/{info['repo']}/releases/latest/download/version.json"
+          for attempt in range(6):
+              try:
+                  online = json.load(urllib.request.urlopen(url, timeout=20))
+                  break
+              except Exception as exc:
+                  print(f"essai {attempt + 1} : {exc}")
+                  time.sleep(10)
+          else:
+              raise SystemExit(f"{url} injoignable")
+          print(json.dumps(online, ensure_ascii=False, indent=2))
+          if online["sha256"] != local["sha256"]:
+              print("::warning::La dernière release n'est pas celle-ci (brouillon, pré-version, ou plus récente)")
+          else:
+              print("Les barres installées verront cette version : OK")
+          PY
