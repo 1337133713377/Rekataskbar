@@ -52,6 +52,34 @@ def test_layout_is_cleaned():
     assert bar_height({"bar": {"height": 500}}) == 72 and bar_height({"bar": {"height": "x"}}) == 44
 
 
+def test_compact_layout_replaces_the_main_one(taskbar):
+    cfg = taskbar.cfg
+    cfg["layout"] = {"left": ["start", "media", "shortcuts"], "center": [], "right": ["clock"]}
+    cfg["compact_layout"] = {"left": ["reka", "tasks"], "center": [], "right": ["mic", "clock"]}
+    assert normalized_layout(cfg)["left"] == ["start", "media", "shortcuts"]
+    cfg["bar"]["compact"] = True
+    assert normalized_layout(cfg) == {"left": ["reka", "tasks"], "center": [],
+                                      "right": ["mic", "clock"]}
+    cfg["bar"]["height"] = 30
+    taskbar.bar.apply_config()
+    pump(qapp_of(taskbar), 0.05)
+    assert sorted(taskbar.bar.widgets) == ["clock", "mic", "reka", "tasks"]
+    assert taskbar.bar.height() == 30
+    cfg["bar"]["compact"] = False
+    taskbar.bar.apply_config()
+    assert "media" in taskbar.bar.widgets and "start" in taskbar.bar.widgets and "reka" not in taskbar.bar.widgets
+
+
+def qapp_of(taskbar):
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance()
+
+
+def test_guard_is_harmless_outside_windows(taskbar):
+    taskbar.bar._guard_stacking()          # ne lève rien, ne fait rien hors Windows
+    assert taskbar.bar._behind is False
+
+
 def test_geometry_helpers():
     screen = QRect(0, 0, 1920, 1080)
     assert bar_geometry(screen, "top", 44) == QRect(0, 0, 1920, 44)

@@ -6,7 +6,8 @@
     "screen": "",
     "reserve_space": true,
     "hide_windows_taskbar": false,
-    "hide_on_fullscreen": true
+    "hide_on_fullscreen": true,
+    "compact": false
   },
   "appearance": {
     "follow_reka": true,
@@ -14,9 +15,24 @@
     "opacity": 1.0
   },
   "layout": {
-    "left": ["start", "reka", "shortcuts", "tasks"],
-    "center": ["media"],
-    "right": ["strips", "mic", "headphone", "system", "weather", "battery", "clock"]
+    "left": [
+      "start",
+      "reka",
+      "shortcuts",
+      "tasks"
+    ],
+    "center": [
+      "media"
+    ],
+    "right": [
+      "strips",
+      "mic",
+      "headphone",
+      "system",
+      "weather",
+      "battery",
+      "clock"
+    ]
   },
   "widgets": {
     "clock": {
@@ -53,5 +69,19 @@
     "config_path": "",
     "exe_path": "",
     "poll_hz": 20
+  },
+  "compact_layout": {
+    "left": [
+      "start",
+      "reka",
+      "tasks"
+    ],
+    "center": [],
+    "right": [
+      "strips",
+      "mic",
+      "headphone",
+      "clock"
+    ]
   }
 }

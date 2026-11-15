@@ -134,6 +134,15 @@ def test_demo_windows():
 
 
 # --- ancrage ----------------------------------------------------------------------
+def test_covers_screen():
+    screen = (0, 0, 1920, 1080)
+    assert appbar.covers((0, 0, 1920, 1080), screen)                  # plein écran exact
+    assert appbar.covers((-1, 0, 1921, 1081), screen)                 # tolérance d'un pixel
+    assert not appbar.covers((0, 0, 1920, 1040), screen)              # fenêtre sans la barre des tâches
+    assert not appbar.covers((100, 100, 1820, 980), screen)           # fenêtre normale
+    assert not appbar.foreground_fills_screen(0)                      # hors Windows : jamais
+
+
 def test_bar_rect_and_monitor_choice():
     screen = (0, 0, 1920, 1080)
     assert appbar.bar_rect(screen, "top", 44) == (0, 0, 1920, 44)

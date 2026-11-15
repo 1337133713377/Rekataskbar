@@ -48,18 +48,26 @@ WIDGETS = {                   # clé (config layout) → (nom affiché, classe)
     "battery": ("Batterie", BatteryWidget),
     "clock": ("Horloge, calendrier", ClockWidget),
 }
-MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 32, 72, 44
+MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 28, 72, 44
 MARGIN_X, MARGIN_Y = 8, 6
 REHIDE_MS = 2000              # Windows ressort parfois sa barre : on la recache
+GUARD_MS = 1000               # vérification de la superposition (jeu plein écran, Ctrl+Échap)
 HOTKEY_MIC = 1
 WM_HOTKEY = 0x0312
 HWND_BOTTOM, HWND_TOPMOST = 1, -1
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x1, 0x2, 0x10
 
 
+def is_compact(cfg: dict) -> bool:
+    """Mode compact : barre fine avec les widgets essentiels (second écran)."""
+    return bool(cfg.get("bar", {}).get("compact", False))
+
+
 def normalized_layout(cfg: dict) -> dict[str, list[str]]:
-    """Disposition des widgets : zones connues, widgets connus, sans doublon."""
-    raw = cfg.get("layout") if isinstance(cfg.get("layout"), dict) else {}
+    """Disposition des widgets : zones connues, widgets connus, sans doublon.
+    En mode compact, c'est la disposition « compact_layout » qui s'applique."""
+    key = "compact_layout" if is_compact(cfg) else "layout"
+    raw = cfg.get(key) if isinstance(cfg.get(key), dict) else {}
     seen: set[str] = set()
     layout: dict[str, list[str]] = {}
     for zone in ZONES:
@@ -135,6 +143,10 @@ class TaskbarWindow(QWidget):
         self._rehide = QTimer(self)
         self._rehide.setInterval(REHIDE_MS)
         self._rehide.timeout.connect(self._keep_windows_taskbar_hidden)
+        self._guard = QTimer(self)
+        self._guard.setInterval(GUARD_MS)
+        self._guard.timeout.connect(self._guard_stacking)
+        self._behind = False
 
         reka.setup_changed.connect(self._on_reka_setup)
         updates.ready.connect(self.install_ready_update)
@@ -242,6 +254,27 @@ class TaskbarWindow(QWidget):
         self.dock()
         self._sync_windows_taskbar()
         self._register_hotkey()
+        self._guard.start()
+        self._guard_stacking()
+
+    def _guard_stacking(self) -> None:
+        """Garde l'ordre d'affichage, à chaque seconde, d'après ce qui est
+        vraiment au premier plan : la barre passe derrière un jeu plein écran
+        (si l'option le demande), et remonte dès que ce n'est plus le cas.
+        Une notification manquée ne la laisse donc jamais cachée."""
+        if sys.platform != "win32" or not self._persist or not self.isVisible():
+            return
+        from core import winapi
+
+        hide_behind = bool(self._cfg.get("bar", {}).get("hide_on_fullscreen", True)) \
+            and appbar.foreground_fills_screen(int(self.winId()))
+        if hide_behind != self._behind:
+            self._behind = hide_behind
+            log.info("Barre %s.", "passée derrière l'application en plein écran" if hide_behind
+                     else "remise au premier plan")
+        winapi.user32.SetWindowPos(int(self.winId()), winapi.HWND_BOTTOM if hide_behind
+                                   else winapi.HWND_TOPMOST, 0, 0, 0, 0,
+                                   winapi.SWP_NOMOVE | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE)
 
     def apply_config(self) -> None:
         """Après un changement dans les réglages : tout est repris de la config."""
@@ -333,13 +366,10 @@ class TaskbarWindow(QWidget):
     def _on_appbar_event(self, code: int, value: int) -> None:
         if code == appbar.ABN_POSCHANGED:
             QTimer.singleShot(0, self.dock)
-        elif code == appbar.ABN_FULLSCREENAPP and self._cfg.get("bar", {}).get(
-                "hide_on_fullscreen", True):
-            # Jeu ou vidéo en plein écran : la barre passe derrière, puis revient
-            from core import winapi
-
-            winapi.user32.SetWindowPos(int(self.winId()), HWND_BOTTOM if value else HWND_TOPMOST,
-                                       0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        elif code == appbar.ABN_FULLSCREENAPP:
+            # Windows signale un plein écran : on vérifie tout de suite, sans attendre
+            # la prochaine seconde (la vérification fait foi, la notification déclenche)
+            self._guard_stacking()
 
     # --------------------------------------------------------------- commandes
     def save(self) -> None:
@@ -474,6 +504,7 @@ class TaskbarWindow(QWidget):
             return
         self._closing = True
         self._rehide.stop()
+        self._guard.stop()
         if self._mixer is not None:
             self._mixer.close()
         if self._settings is not None:

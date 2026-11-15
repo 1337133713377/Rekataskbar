@@ -103,7 +103,7 @@ class SettingsDialog(QDialog):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.height_box = QSpinBox()
         self.height_box.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self.height_box.setRange(32, 72)
+        self.height_box.setRange(28, 72)
         self.height_box.setSuffix(" px")
         self.height_box.setValue(int(bar.get("height", 44) or 44))
         form.addRow("Hauteur", self.height_box)
@@ -123,6 +123,12 @@ class SettingsDialog(QDialog):
         self.opacity.setSuffix(" %")
         self.opacity.setValue(round(float(self._cfg.get("appearance", {}).get("opacity", 1.0)) * 100))
         form.addRow("Opacité du fond", self.opacity)
+
+        self.compact = QCheckBox("Mode compact (second écran) : barre fine, widgets essentiels")
+        self.compact.setChecked(bool(bar.get("compact", False)))
+        self.compact.setToolTip("Utilise la disposition « compact_layout » de la config : "
+                                "fenêtres, REKA, canaux, micro, casque et horloge.")
+        form.addRow(self.compact)
 
         self.reserve = QCheckBox("Réserver la place de la barre (les fenêtres agrandies s'arrêtent à elle)")
         self.reserve.setChecked(bool(bar.get("reserve_space", True)))
@@ -349,6 +355,7 @@ class SettingsDialog(QDialog):
         bar["screen"] = self.screen.currentData()
         bar["reserve_space"] = self.reserve.isChecked()
         bar["hide_on_fullscreen"] = self.fullscreen.isChecked()
+        bar["compact"] = self.compact.isChecked()
         bar["hide_windows_taskbar"] = self.hide_taskbar.isChecked()
 
         appearance = cfg.setdefault("appearance", {})

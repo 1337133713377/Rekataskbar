@@ -75,6 +75,52 @@ def pick_monitor(monitors: list[Monitor], device: str,
     return monitors[0] if monitors else None
 
 
+def covers(window: Rect, monitor: Rect) -> bool:
+    """La fenêtre recouvre-t-elle tout l'écran (à 1 pixel près) ?"""
+    return (window[0] <= monitor[0] + 1 and window[1] <= monitor[1] + 1
+            and window[2] >= monitor[2] - 1 and window[3] >= monitor[3] - 1)
+
+
+# Fenêtres du bureau : elles couvrent l'écran sans être un jeu
+DESKTOP_CLASSES = ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd")
+
+
+def foreground_fills_screen(own_hwnd: int) -> bool:
+    """Une autre application plein écran est-elle au premier plan, sur le même
+    écran que la barre ? Lu directement (pas via une notification de Windows,
+    qui peut manquer quand un jeu quitte le plein écran, par exemple après
+    Ctrl+Échap)."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    from core import winapi
+
+    foreground = int(winapi.user32.GetForegroundWindow() or 0)
+    if not foreground or foreground == own_hwnd or winapi.class_name(foreground) in DESKTOP_CLASSES:
+        return False
+    monitor_flag = 2                                   # MONITOR_DEFAULTTONEAREST
+
+    def monitor_of(hwnd: int):
+        handle = int(winapi.user32.MonitorFromWindow(hwnd, monitor_flag) or 0)
+        info = winapi.MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(info)
+        if not handle or not winapi.user32.GetMonitorInfoW(handle, ctypes.byref(info)):
+            return None, None
+        r = info.rcMonitor
+        return handle, (r.left, r.top, r.right, r.bottom)
+
+    own_handle, own_rect = monitor_of(own_hwnd)
+    fg_handle, fg_rect = monitor_of(foreground)
+    if own_rect is None or fg_rect is None or own_handle != fg_handle:
+        return False
+    window = wintypes.RECT()
+    if not winapi.user32.GetWindowRect(foreground, ctypes.byref(window)):
+        return False
+    return covers((window.left, window.top, window.right, window.bottom), own_rect)
+
+
 def list_monitors() -> list[Monitor]:
     if sys.platform != "win32":
         return []
