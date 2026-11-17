@@ -1,5 +1,12 @@
 # Nouveautés de REKA Taskbar
 
+## 1.3.0
+
+- Nouveau look du lecteur, en haut au milieu : l'icône de l'application qui joue (Spotify, Deezer, navigateur…), le nom du morceau et une vague d'audio qui danse au rythme de la musique.
+- La vague suit le vrai niveau du canal « Musique » de REKA ; si ce canal reste muet pendant la lecture (musique routée ailleurs), elle s'anime toute seule. En pause, elle se pose.
+- Clic : le lecteur complet ; clic du milieu : lecture / pause ; l'artiste est dans la bulle.
+- L'ancien style (pochette, titre et artiste, boutons) reste disponible, tout comme le choix du canal suivi par la vague : Réglages → Widgets.
+
 ## 1.2.0
 
 - Lecteur de musique au milieu de la barre : pochette, titre et artiste sur deux lignes, avancée du morceau. Un clic ouvre le lecteur complet : grande pochette, frise pour avancer ou reculer dans le morceau, précédent / pause / suivant, et un bouton pour afficher l'application qui joue. Sans musique, il reste discret (« Aucune lecture »), ou se cache (Réglages → Widgets).

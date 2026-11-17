@@ -45,7 +45,9 @@
       "labels": false
     },
     "media": {
-      "show_idle": true
+      "style": "wave",
+      "show_idle": true,
+      "level_strip": -1
     },
     "system": {
       "interval_s": 1.5

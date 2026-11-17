@@ -6,7 +6,7 @@ et mémoire, réseau, météo, batterie, horloge et calendrier.
 from __future__ import annotations
 
 from PySide6.QtCore import QDate, QLocale, QRectF, QSize, Qt, QTime, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractButton, QCalendarWidget, QLabel, QSizePolicy, QToolButton,
                                QWidget)
 
@@ -15,7 +15,7 @@ from core.media import MediaInfo
 from core.system import SystemStats, format_bytes, format_duration, format_rate
 from core.weather import Weather
 from ui import icons, styles
-from ui.media_player import CoverArt
+from ui.media_player import AppBadge, AudioWave, CoverArt
 from ui.popup import Popup
 from ui.widgets.appicon import app_pixmap
 from ui.widgets.base import PILL_RADIUS, Context, Icon, IconButton, Pill, Text
@@ -197,10 +197,35 @@ class TrackText(QWidget):
                                                               Qt.TextElideMode.ElideRight, width))
 
 
+MEDIA_STYLES = {"wave": "Icône de l'application, titre et vague d'audio",
+                "full": "Pochette, titre et artiste, boutons"}
+
+
+def music_strip(cfg: dict, setup) -> int:
+    """Canal de REKA dont la vague suit le niveau : celui des réglages, sinon
+    le canal dont le nom évoque la musique ; -1 s'il n'y en a pas."""
+    try:
+        chosen = int(cfg.get("widgets", {}).get("media", {}).get("level_strip", -1))
+    except (TypeError, ValueError, AttributeError):
+        chosen = -1
+    count = len(setup.strips)
+    if 0 <= chosen < count:
+        return chosen
+    for index in range(count):
+        name = setup.name(index).lower()
+        if any(word in name for word in ("musi", "music", "spotify", "zik", "son")):
+            return index
+    return -1
+
+
 class MediaWidget(Pill):
-    """Le lecteur de musique de la barre (au milieu, par défaut) : pochette,
-    morceau, frise, précédent / lecture-pause / suivant. Un clic ouvre le
-    lecteur complet. Sans musique, il reste discret (« Aucune lecture »)."""
+    """Le lecteur de musique de la barre (au milieu, par défaut).
+
+    Style « wave » : icône de l'application qui joue, titre du morceau et
+    petite vague d'audio qui suit le canal Musique de REKA. Style « full » :
+    pochette, titre et artiste, frise, précédent / lecture-pause / suivant.
+    Un clic ouvre le lecteur complet, le clic du milieu met en pause. Sans
+    musique, il reste discret (« Aucune lecture »)."""
 
     key = "media"
     MAX_TEXT = 260
@@ -212,19 +237,31 @@ class MediaWidget(Pill):
         self._media = ctx.media
         self._info: MediaInfo | None = None
         self._popup = None
-        self.show_idle = bool(ctx.widget_cfg("media").get("show_idle", True))
-        self.row.setContentsMargins(5, 0, 5, 0)
+        options = ctx.widget_cfg("media")
+        self.show_idle = bool(options.get("show_idle", True))
+        self.style = options.get("style") if options.get("style") in MEDIA_STYLES else "wave"
+        wave_style = self.style == "wave"
+        self.row.setContentsMargins(8 if wave_style else 5, 0, 10 if wave_style else 5, 0)
+        self.row.setSpacing(8 if wave_style else 6)
         self.cover = CoverArt(26)
+        self.badge = AppBadge(20)
         self.title = TrackText(self.MAX_TEXT)
+        self.wave = AudioWave(18)
         self.previous = IconButton("previous", "Précédent", role="TEXT_SECONDARY", icon_size=13)
         self.play = IconButton("play", "Lecture / pause", filled=True, icon_size=12, size=24)
         self.next = IconButton("next", "Suivant", role="TEXT_SECONDARY", icon_size=13)
+        self.row.addWidget(self.badge)
         self.row.addWidget(self.cover)
-        self.row.addSpacing(2)
         self.row.addWidget(self.title)
-        self.row.addSpacing(2)
+        self.row.addWidget(self.wave)
         for button in (self.previous, self.play, self.next):
             self.row.addWidget(button)
+        for widget in (self.badge, self.wave):
+            widget.setVisible(wave_style)
+        self.cover.setVisible(not wave_style)
+        self._buttons_shown = not wave_style
+        self._strip = -1
+        ctx.vm.levels_changed.connect(self._on_levels)
         self.previous.clicked.connect(self._media.previous)
         self.play.clicked.connect(self._media.play_pause)
         self.next.clicked.connect(self._media.next)
@@ -249,7 +286,9 @@ class MediaWidget(Pill):
         self.set_shown(info is not None or (self.show_idle and available))
         idle = info is None
         for button in (self.previous, self.play, self.next):
-            button.setVisible(not idle)
+            button.setVisible(not idle and self._buttons_shown)
+        self.wave.set_playing(bool(info is not None and info.playing))
+        self._show_badge(info)
         if idle:
             self._timer.stop()
             self.cover.set_cover(b"")
@@ -259,7 +298,10 @@ class MediaWidget(Pill):
             self.updateGeometry()
             self.update()
             return
-        self.title.set_track(info.title, info.artist)
+        if self.style == "wave":
+            self.title.set_track(info.title)        # le nom du morceau ; l'artiste en bulle
+        else:
+            self.title.set_track(info.title, info.artist)
         self.cover.set_cover(info.cover)
         self.play.set_icon("pause" if info.playing else "play")
         self.previous.setEnabled(info.can_previous)
@@ -267,8 +309,9 @@ class MediaWidget(Pill):
         self.play.setEnabled(info.can_play_pause)
         details = [info.title, info.artist, info.album]
         self.setToolTip("\n".join(d for d in details if d)
-                        + (f"\n{info.app}" if info.app else "") + "\nClic : lecteur")
-        if info.playing and info.duration > 0:
+                        + (f"\n{info.app}" if info.app else "")
+                        + "\nClic : lecteur · clic du milieu : lecture / pause")
+        if info.playing and info.duration > 0 and self.style == "full":
             self._timer.start()
         else:
             self._timer.stop()
@@ -281,10 +324,60 @@ class MediaWidget(Pill):
         cover = max(14, min(26, self.height() - 8))
         if self.cover.width() != cover:
             self.cover.setFixedSize(cover, cover)
+        badge = max(14, min(20, self.height() - 10))
+        if self.badge.width() != badge:
+            self.badge.setFixedSize(badge, badge)
+            self._show_badge(self._info)
+        wave = max(12, min(18, self.height() - 8))
+        if self.wave.height() != wave:
+            self.wave.setFixedHeight(wave)
         for button, largest in ((self.previous, 26), (self.play, 24), (self.next, 26)):
             side = max(14, min(largest, self.height() - 4))
             if button.width() != side:
                 button.setFixedSize(side, side)
+
+    def _show_badge(self, info: MediaInfo | None) -> None:
+        """Icône de l'application qui joue : celle de sa fenêtre ; à défaut, la
+        pochette ; à défaut, une note de musique."""
+        if self.style != "wave":
+            return
+        if info is None:
+            self.badge.set_pixmap(QPixmap(), "")
+            return
+        window = None
+        if info.app and getattr(self._ctx.windows, "available", False):
+            window = self._ctx.windows.find_app(info.app)
+        if window is not None:
+            self.badge.set_pixmap(app_pixmap(window.exe, window.app, self.badge.width(),
+                                             self.devicePixelRatioF()), f"app:{window.exe}")
+        elif info.cover:
+            pixmap = QPixmap()
+            pixmap.loadFromData(info.cover)
+            self.badge.set_pixmap(pixmap, f"cover:{info.app}:{info.title}")
+        else:
+            self.badge.set_pixmap(QPixmap(), "")
+
+    def _on_levels(self, levels) -> None:
+        """Niveaux de Voicemeeter : la vague suit le canal Musique de REKA."""
+        if self.style != "wave" or levels is None:
+            return
+        strip = music_strip(self._ctx.cfg, self._ctx.vm.setup)
+        if 0 <= strip < len(levels.strips):
+            self.wave.set_level_db(max(levels.strips[strip]))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.MiddleButton:
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.MiddleButton:
+            if self._info is not None:
+                self._media.play_pause()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
     def open_player(self) -> None:
         from ui.media_player import MediaPopup
@@ -313,7 +406,7 @@ class MediaWidget(Pill):
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
         progress = self.progress
-        if self._info is None or self._info.duration <= 0:
+        if self._info is None or self._info.duration <= 0 or self.style != "full":
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

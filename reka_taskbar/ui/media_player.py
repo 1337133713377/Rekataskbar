@@ -10,6 +10,9 @@ lecture-pause / suivant, et un bouton pour afficher l'application qui joue
 
 from __future__ import annotations
 
+import math
+import time
+
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
@@ -290,3 +293,116 @@ class MediaPopup(Popup):
         self._windows.activate(window.hwnd)
         self.close()
         return True
+
+
+# --------------------------------------------------------------------------- #
+# Vague d'audio
+# --------------------------------------------------------------------------- #
+WAVE_FPS = 30
+SILENCE_FALLBACK_S = 2.0      # canal muet alors que ça joue : vague simulée
+
+
+class AudioWave(QWidget):
+    """Petite vague d'audio (barres qui dansent) : elle suit le niveau du canal
+    Musique de REKA quand Voicemeeter le donne ; sinon, pendant la lecture,
+    elle s'anime seule. En pause, elle se pose."""
+
+    BARS = 7
+    BAR_W = 3
+    GAP = 2
+    FLOOR_DB, FULL_DB = -48.0, -6.0     # échelle de la musique : -6 dB remplit la vague
+
+    def __init__(self, height: int = 18, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.playing = False
+        self._target = 0.0            # niveau voulu (0 à 1), venu de Voicemeeter
+        self._level = 0.0             # niveau affiché, lissé
+        self._real_at = -1e9          # dernier niveau non muet reçu (time.monotonic)
+        self._phase = 0.0
+        self.heights = [0.12] * self.BARS
+        self.setFixedSize(self.BARS * self.BAR_W + (self.BARS - 1) * self.GAP + 2, height)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000 // WAVE_FPS)
+        self._timer.timeout.connect(self.step)
+
+    @property
+    def simulated(self) -> bool:
+        """La vague s'anime seule (pas de niveau réel récent)."""
+        return time.monotonic() - self._real_at > SILENCE_FALLBACK_S
+
+    def set_playing(self, playing: bool) -> None:
+        self.playing = playing
+        if playing or self._level > 0.01:
+            self._timer.start()
+
+    def set_level_db(self, db: float) -> None:
+        """Niveau du canal Musique (dB, post-fader)."""
+        fraction = max(0.0, min(1.0, (float(db) - self.FLOOR_DB) / (self.FULL_DB - self.FLOOR_DB)))
+        self._target = fraction ** 0.6          # la musique douce bouge encore bien
+        if db > -55.0:
+            self._real_at = time.monotonic()
+
+    def step(self, dt: float = 1.0 / WAVE_FPS) -> None:
+        """Une image de l'animation (appelée par la minuterie)."""
+        if not self.playing:
+            target = 0.0
+        elif self.simulated:
+            target = 0.55 + 0.2 * math.sin(self._phase * 0.9)
+        else:
+            target = self._target
+        speed = 0.45 if target > self._level else 0.12          # monte vite, retombe doucement
+        self._level += (target - self._level) * speed
+        self._phase += dt * 6.0
+        middle = (self.BARS - 1) / 2            # plus haute au centre, comme une onde
+        self.heights = [max(0.12, self._level * (1.0 - 0.35 * abs(n - middle) / middle)
+                            * (0.5 + 0.5 * abs(math.sin(self._phase * (1.0 + 0.37 * n) + n * 1.3))))
+                        for n in range(self.BARS)]
+        if not self.playing and self._level < 0.01:
+            self.heights = [0.12] * self.BARS
+            self._timer.stop()
+        window = self.window()
+        if window is not None and window.updatesEnabled():       # derrière un jeu : rien
+            self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (API Qt)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(styles.GREEN_NEON if self.playing else styles.TEXT_MUTED))
+        usable = self.height() - 2
+        for n, fraction in enumerate(self.heights):
+            h = max(self.BAR_W, usable * fraction)
+            x = 1 + n * (self.BAR_W + self.GAP)
+            painter.drawRoundedRect(QRectF(x, (self.height() - h) / 2, self.BAR_W, h),
+                                    self.BAR_W / 2, self.BAR_W / 2)
+
+
+class AppBadge(QWidget):
+    """Icône de l'application qui joue (Spotify, Deezer, navigateur…)."""
+
+    def __init__(self, size: int = 20, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pixmap = QPixmap()
+        self.source = ""
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_pixmap(self, pixmap: QPixmap, source: str) -> None:
+        if source != self.source or pixmap.isNull() != self._pixmap.isNull():
+            self.source, self._pixmap = source, pixmap
+            self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        rect = QRectF(self.rect())
+        if self._pixmap.isNull():
+            icons.draw(painter, "music", rect.adjusted(2, 2, -2, -2),
+                       styles.accent("media", styles.MASTER_SCOPE))
+            return
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, 4, 4)
+        painter.setClipPath(clip)
+        painter.drawPixmap(rect, self._pixmap, QRectF(self._pixmap.rect()))

@@ -290,8 +290,16 @@ def test_reka_button_shows_the_console(qapp, taskbar):
     assert "REKA est ouverte" in taskbar.bar.widgets["reka"].toolTip()
 
 
+def full_media(qapp, taskbar):
+    """Le lecteur dans le style « pochette, titre et artiste, boutons »."""
+    taskbar.cfg["widgets"]["media"]["style"] = "full"
+    taskbar.bar.build_widgets()
+    pump(qapp, 0.1)
+    return taskbar.bar.widgets["media"]
+
+
 def test_media_widget(qapp, taskbar):
-    media = taskbar.bar.widgets["media"]
+    media = full_media(qapp, taskbar)
     assert media.title.text == "Néons de minuit — Les Ondes" and media.play.name == "pause"
     media.next.click()
     assert media.title.text == "Ligne de basse — Studio 206"
@@ -306,7 +314,7 @@ def test_media_widget(qapp, taskbar):
 
 
 def test_media_widget_shows_track_progress(qapp, taskbar):
-    media = taskbar.bar.widgets["media"]
+    media = full_media(qapp, taskbar)
     info = taskbar.media.current
     assert info.duration == 214.0 and info.can_seek
     assert 0.3 < media.progress < 0.4                          # 71 s sur 214
@@ -314,6 +322,57 @@ def test_media_widget_shows_track_progress(qapp, taskbar):
     taskbar.media.seek(107.0)
     assert abs(media.progress - 0.5) < 0.02
     assert not media.grab().isNull()
+
+
+def test_media_wave_style_is_the_default(qapp, taskbar):
+    from ui.widgets.general import music_strip
+
+    media = taskbar.bar.widgets["media"]
+    assert media.style == "wave"
+    assert media.badge.isVisible() and media.wave.isVisible() and media.title.isVisible()
+    assert not media.cover.isVisible() and not media.play.isVisible()
+    assert media.title.text == "Néons de minuit"                # le nom du morceau seul
+    assert media.badge.source == "app:C:/Apps/Spotify.exe"       # icône de l'application qui joue
+    assert "Les Ondes" in media.toolTip()
+
+    assert music_strip(taskbar.cfg, taskbar.vm.setup) == 1       # « Musique » de REKA
+    taskbar.cfg["widgets"]["media"]["level_strip"] = 3
+    assert music_strip(taskbar.cfg, taskbar.vm.setup) == 3
+    taskbar.cfg["widgets"]["media"]["level_strip"] = -1
+
+    wave = media.wave
+    assert wave.playing and not wave.simulated                   # la démo envoie des niveaux
+    wave._real_at = -1e9                                         # canal Musique muet longtemps
+    assert wave.simulated
+    for _frame in range(20):
+        wave.step()
+    assert max(wave.heights) > 0.3                               # elle danse toute seule
+    wave.set_level_db(-6.0)                                      # canal Musique fort
+    assert not wave.simulated
+    for _frame in range(20):
+        wave.step()
+    loud = max(wave.heights)
+    wave.set_level_db(-40.0)                                     # canal Musique faible
+    for _frame in range(40):
+        wave.step()
+    assert max(wave.heights) < loud
+
+    QTest.mouseClick(media, Qt.MouseButton.MiddleButton, pos=QPoint(4, media.height() // 2))
+    assert not taskbar.media.current.playing and not wave.playing   # clic du milieu : pause
+    for _frame in range(80):
+        wave.step()
+    assert wave.heights == [0.12] * wave.BARS                     # en pause, elle se pose
+    assert not media.grab().isNull()
+
+
+def test_media_wave_follows_the_music_channel(qapp, taskbar):
+    from core.voicemeeter import MixerLevels
+
+    media = taskbar.bar.widgets["media"]
+    strips = [(-60.0, -60.0)] * len(taskbar.vm.setup.strips)
+    strips[1] = (-12.0, -10.0)                                   # Musique
+    taskbar.vm.levels_changed.emit(MixerLevels(tuple(strips)))
+    assert not media.wave.simulated and abs(media.wave._target - 0.905 ** 0.6) < 0.01   # -10 dB
 
 
 def test_media_player_popup(qapp, taskbar):
@@ -532,6 +591,9 @@ def test_settings_apply_writes_config_and_rebuilds(qapp, taskbar):
     dialog.city.setText("  Lyon ")
     dialog.hotkey.setText("Ctrl+Alt+M")
     assert dialog.show_hotkey.text() == "Ctrl+Alt+B" and dialog.media_idle.isChecked()
+    assert dialog.media_style.currentData() == "wave" and dialog.media_strip.currentData() == -1
+    dialog.media_style.setCurrentIndex(dialog.media_style.findData("full"))
+    dialog.media_strip.setCurrentIndex(dialog.media_strip.findData(1))
     dialog.show_hotkey.setText(" F14 ")
     dialog.media_idle.setChecked(False)
     dialog.mic_strip.setCurrentIndex(dialog.mic_strip.findData(1))
@@ -549,6 +611,8 @@ def test_settings_apply_writes_config_and_rebuilds(qapp, taskbar):
         assert cfg["bar"]["show_hotkey"] == "F14" and cfg["widgets"]["media"]["show_idle"] is False
         assert taskbar.bar.hotkey_texts()[2][0] == "F14"
         assert not taskbar.bar.widgets["media"].show_idle
+        assert cfg["widgets"]["media"]["style"] == "full" and cfg["widgets"]["media"]["level_strip"] == 1
+        assert taskbar.bar.widgets["media"].style == "full"
         assert cfg["shortcuts"][-1] == {"name": "jeu", "path": "C:\\Jeux\\jeu.exe"}
         bar = taskbar.bar
         assert "start" not in bar.widgets and "network" in bar.widgets

@@ -228,9 +228,28 @@ class SettingsDialog(QDialog):
         self.task_labels = QCheckBox("Afficher le titre des fenêtres à côté de leur icône")
         self.task_labels.setChecked(bool(options.get("tasks", {}).get("labels", False)))
         form.addRow("Fenêtres", self.task_labels)
+        from ui.widgets.general import MEDIA_STYLES
+
+        media = options.get("media", {})
+        self.media_style = QComboBox()
+        for key, label in MEDIA_STYLES.items():
+            self.media_style.addItem(label, key)
+        self.media_style.setCurrentIndex(max(0, self.media_style.findData(
+            media.get("style", "wave"))))
+        form.addRow("Lecteur de musique", self.media_style)
+        setup = self._reka.setup
+        self.media_strip = QComboBox()
+        self.media_strip.addItem("Automatique (le canal « Musique » de REKA)", -1)
+        for index in range(len(setup.strips)):
+            self.media_strip.addItem(setup.name(index), index)
+        self.media_strip.setCurrentIndex(max(0, self.media_strip.findData(
+            int(media.get("level_strip", -1)))))
+        self.media_strip.setToolTip("La vague d'audio suit le niveau de ce canal ; s'il reste "
+                                    "muet pendant la lecture, elle s'anime seule.")
+        form.addRow("Canal de la vague", self.media_strip)
         self.media_idle = QCheckBox("Toujours afficher le lecteur, même quand rien ne joue")
-        self.media_idle.setChecked(bool(options.get("media", {}).get("show_idle", True)))
-        form.addRow("Musique", self.media_idle)
+        self.media_idle.setChecked(bool(media.get("show_idle", True)))
+        form.addRow("", self.media_idle)
         self.city = QLineEdit(str(options.get("weather", {}).get("city") or ""))
         self.city.setPlaceholderText("Paris, Lyon, Montréal… (vide : pas de météo)")
         form.addRow("Ville de la météo", self.city)
@@ -381,7 +400,9 @@ class SettingsDialog(QDialog):
         widgets.setdefault("clock", {}).update(seconds=self.clock_seconds.isChecked(),
                                                date=self.clock_date.isChecked())
         widgets.setdefault("tasks", {})["labels"] = self.task_labels.isChecked()
-        widgets.setdefault("media", {})["show_idle"] = self.media_idle.isChecked()
+        widgets.setdefault("media", {}).update(show_idle=self.media_idle.isChecked(),
+                                               style=self.media_style.currentData(),
+                                               level_strip=int(self.media_strip.currentData()))
         widgets.setdefault("weather", {})["city"] = self.city.text().strip()
         widgets.setdefault("mic", {}).update(strip=int(self.mic_strip.currentData()),
                                              hotkey=self.hotkey.text().strip())

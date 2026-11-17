@@ -12,7 +12,7 @@ Une barre des tâches personnalisée pour Windows 10 / 11, avec des widgets d'us
 | **Bouton REKA** | REKA ouverte ou non, Voicemeeter connecté ou non (pastille verte / ambre / grise) | clic : affiche la console, ou la lance si elle est fermée |
 | **Raccourcis** | tes programmes, dossiers et fichiers préférés | clic |
 | **Fenêtres ouvertes** | une icône par fenêtre, la fenêtre active soulignée, les fenêtres réduites estompées | clic : afficher (même réduite) / réduire · clic du milieu : fermer · « +3 » : liste des fenêtres qui ne tiennent pas |
-| **Lecteur de musique** | au milieu de la barre : pochette, titre et artiste, avancée du morceau (Spotify, Deezer, navigateur…) | précédent / pause / suivant · clic : lecteur complet (grande pochette, frise pour avancer ou reculer, bouton pour afficher l'application) |
+| **Lecteur de musique** | au milieu de la barre : icône de l'application qui joue (Spotify, Deezer, navigateur…), nom du morceau et vague d'audio qui suit le canal Musique de REKA ; autre style : pochette, titre et artiste, boutons | clic : lecteur complet (grande pochette, frise pour avancer ou reculer, précédent / pause / suivant, bouton pour afficher l'application) · clic du milieu : lecture / pause |
 | **Canaux de REKA** | chaque canal de la console avec son niveau | clic : muet · molette : volume · bouton à curseurs : mini-console |
 | **Micro** | micro ouvert ou coupé, et son niveau | clic : couper / rouvrir · molette : volume · raccourci clavier global |
 | **Casque** | volume et niveau de la sortie casque | molette : volume · clic : muet · clic du milieu : 0 dB |
@@ -86,7 +86,7 @@ Les nouveautés de chaque version sont dans [NOUVEAUTES.md](reka_taskbar/NOUVEAU
 | Onglet | Réglages |
 |---|---|
 | **Barre** | en haut ou en bas, hauteur, écran, opacité, place réservée (les fenêtres agrandies s'arrêtent à la barre), passage derrière les jeux en plein écran et raccourci pour la rappeler en jeu, masquage de la barre de Windows, démarrage avec Windows, mises à jour automatiques |
-| **Widgets** | zone et ordre de chaque widget (glisser-déposer), secondes et date de l'horloge, titres des fenêtres, lecteur affiché même sans musique, ville de la météo |
+| **Widgets** | zone et ordre de chaque widget (glisser-déposer), secondes et date de l'horloge, titres des fenêtres, style du lecteur et canal suivi par sa vague, lecteur affiché même sans musique, ville de la météo |
 | **REKA** | état du lien, thème, canal du micro, raccourci « couper le micro », emplacement de `REKA.exe` |
 | **Raccourcis** | programmes, dossiers et fichiers du widget Raccourcis |
 
