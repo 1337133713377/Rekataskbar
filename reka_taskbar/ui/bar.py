@@ -5,6 +5,11 @@ de widgets (gauche, centre, droite) décrites dans la config (layout).
 Sous Windows, elle se déclare « barre d'application » : les fenêtres agrandies
 s'arrêtent à elle. Elle ne prend jamais le focus du clavier, comme la barre
 des tâches de Windows : un clic sur un widget ne dérange pas la fenêtre active.
+
+Jeux et vidéos en plein écran : la barre passe derrière eux et ne se redessine
+plus (aucune ressource prise au jeu) ; elle revient dès qu'une autre fenêtre
+est au premier plan. Un raccourci (Ctrl+Alt+B par défaut) la fait revenir
+par-dessus le jeu, le temps d'ouvrir une fenêtre ou une application.
 """
 
 from __future__ import annotations
@@ -13,10 +18,10 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter
+from PySide6.QtCore import QEvent, QRect, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QCursor, QDesktopServices, QGuiApplication, QPainter
 from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QGridLayout, QMenu,
-                               QMessageBox, QSizePolicy, QWidget)
+                               QMessageBox, QSizePolicy, QToolTip, QWidget)
 
 from core import appbar, config, shell, updater
 from core.reka_link import REKA_DOWNLOAD_URL, RekaSetup
@@ -52,10 +57,11 @@ MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 28, 72, 44
 MARGIN_X, MARGIN_Y = 8, 6
 REHIDE_MS = 2000              # Windows ressort parfois sa barre : on la recache
 GUARD_MS = 1000               # vérification de la superposition (jeu plein écran, Ctrl+Échap)
-HOTKEY_MIC = 1
+SUMMON_IDLE_S = 4             # barre rappelée par-dessus un jeu : repart après 4 s sans servir
+DOCK_DELAY_MS = 400           # changement d'écran ou de résolution : un seul ré-ancrage
+HOTKEY_MIC, HOTKEY_SHOW = 1, 2
+DEFAULT_SHOW_HOTKEY = "Ctrl+Alt+B"
 WM_HOTKEY = 0x0312
-HWND_BOTTOM, HWND_TOPMOST = 1, -1
-SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x1, 0x2, 0x10
 
 
 def is_compact(cfg: dict) -> bool:
@@ -86,6 +92,15 @@ def bar_height(cfg: dict) -> int:
     except (TypeError, ValueError):
         height = DEFAULT_HEIGHT
     return max(MIN_HEIGHT, min(MAX_HEIGHT, height))
+
+
+def centered_columns(width: int, center: int, left_min: int, right_min: int,
+                     spacing: int) -> int:
+    """Largeur à donner aux zones gauche et droite pour que la zone du milieu
+    soit exactement au centre de la barre ; 0 si l'une des deux n'a pas la
+    place (le milieu se décale alors un peu, plutôt que de rogner un widget)."""
+    side = (width - center - 2 * spacing) // 2
+    return side if side >= max(left_min, right_min, 0) and center > 0 else 0
 
 
 def bar_geometry(screen: QRect, edge: str, height: int) -> QRect:
@@ -124,12 +139,19 @@ class TaskbarWindow(QWidget):
         self._settings = None
         self._appbar: appbar.AppBar | None = None
         self._taskbar_hidden = False
-        self._hotkey = False
+        self._hotkeys: set[int] = set()
         self._closing = False
+        self._summoned_for = 0          # jeu plein écran par-dessus lequel la barre est rappelée
+        self._summon_idle = 0           # secondes passées sans servir, une fois rappelée
+        self._balancing = False
 
         grid = QGridLayout(self)
         grid.setContentsMargins(MARGIN_X, MARGIN_Y, MARGIN_X, MARGIN_Y)
         grid.setHorizontalSpacing(12)
+        # La barre ne s'impose aucune largeur minimale : quand un jeu baisse la
+        # résolution de l'écran, elle doit pouvoir rétrécir avec lui
+        grid.setSizeConstraint(QGridLayout.SizeConstraint.SetNoConstraint)
+        self._grid = grid
         for column, zone in enumerate(ZONES):
             holder = QWidget(self)
             row = QHBoxLayout(holder)
@@ -146,17 +168,33 @@ class TaskbarWindow(QWidget):
         self._rehide.timeout.connect(self._keep_windows_taskbar_hidden)
         self._guard = QTimer(self)
         self._guard.setInterval(GUARD_MS)
-        self._guard.timeout.connect(self._guard_stacking)
+        self._guard.timeout.connect(lambda: self._guard_stacking(tick=True))
         self._behind = False
+        self._dock_later = QTimer(self)
+        self._dock_later.setSingleShot(True)
+        self._dock_later.setInterval(DOCK_DELAY_MS)
+        self._dock_later.timeout.connect(self.dock)
 
         reka.setup_changed.connect(self._on_reka_setup)
         updates.ready.connect(self.install_ready_update)
         self.apply_theme()
         self.build_widgets()
-        for screen_signal in (QGuiApplication.instance().screenAdded,
-                              QGuiApplication.instance().screenRemoved,
-                              QGuiApplication.instance().primaryScreenChanged):
-            screen_signal.connect(lambda *_a: QTimer.singleShot(500, self.dock))
+        gui = QGuiApplication.instance()
+        for screen_signal in (gui.screenAdded, gui.screenRemoved, gui.primaryScreenChanged):
+            screen_signal.connect(self._screens_changed)
+        self._watched_screens: set = set()
+        self._screens_changed()
+
+    def _screens_changed(self, *_args) -> None:
+        """Écran branché, débranché, ou résolution changée (un jeu en plein écran
+        exclusif change souvent celle de l'écran) : la barre se ré-ancre, une
+        seule fois quand tout est fini."""
+        for screen in QGuiApplication.screens():
+            if screen not in self._watched_screens:
+                self._watched_screens.add(screen)
+                screen.geometryChanged.connect(self._screens_changed)
+                screen.destroyed.connect(lambda *_a, s=screen: self._watched_screens.discard(s))
+        self._dock_later.start()
 
     # ---------------------------------------------------------------- widgets
     def build_widgets(self) -> None:
@@ -191,6 +229,39 @@ class TaskbarWindow(QWidget):
             if zone == "left" and not expanding:
                 row.addStretch(1)
         self.update()
+        QTimer.singleShot(0, self._balance_zones)
+
+    # ------------------------------------------------- zone du milieu centrée
+    def _balance_zones(self) -> None:
+        """Garde la zone du milieu (le lecteur de musique, par défaut) au centre
+        exact de la barre, quelle que soit la largeur des zones gauche et droite."""
+        if self._balancing or not self._zones:
+            return
+        self._balancing = True
+        try:
+            grid = self._grid
+            center = self._zones["center"]
+            center_width = center.sizeHint().width() if center.isVisibleTo(self) and any(
+                w.isVisibleTo(self) for w in center.findChildren(QWidget)) else 0
+            side = centered_columns(self.width() - 2 * MARGIN_X, center_width,
+                                    self._zones["left"].minimumSizeHint().width(),
+                                    self._zones["right"].minimumSizeHint().width(),
+                                    grid.horizontalSpacing())
+            for column in (0, 2):
+                if grid.columnMinimumWidth(column) != side:
+                    grid.setColumnMinimumWidth(column, side)
+        finally:
+            self._balancing = False
+
+    def event(self, event) -> bool:
+        handled = super().event(event)
+        if event.type() == QEvent.Type.LayoutRequest:
+            self._balance_zones()        # un widget a changé de taille
+        return handled
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._balance_zones()
 
     # ------------------------------------------------------------------ thème
     def apply_theme(self) -> None:
@@ -243,7 +314,7 @@ class TaskbarWindow(QWidget):
             corner = screen.geometry().topLeft()
             self._appbar.dock(edge, round(height * screen.devicePixelRatio()), screen.name(),
                               reserve=bool(bar.get("reserve_space", True)),
-                              origin=(corner.x(), corner.y()))
+                              origin=(corner.x(), corner.y()), behind=self._behind)
         except OSError as exc:
             log.warning("Ancrage de la barre impossible : %s", exc)
 
@@ -254,28 +325,108 @@ class TaskbarWindow(QWidget):
     def _after_show(self) -> None:
         self.dock()
         self._sync_windows_taskbar()
-        self._register_hotkey()
+        self._register_hotkeys()
         self._guard.start()
         self._guard_stacking()
 
-    def _guard_stacking(self) -> None:
+    # ------------------------------------------------- jeux en plein écran
+    def _guard_stacking(self, tick: bool = False) -> None:
         """Garde l'ordre d'affichage, à chaque seconde, d'après ce qui est
         vraiment au premier plan : la barre passe derrière un jeu plein écran
         (si l'option le demande), et remonte dès que ce n'est plus le cas.
-        Une notification manquée ne la laisse donc jamais cachée."""
+        Une notification manquée ne la laisse donc jamais cachée.
+
+        Elle reste devant si on l'a rappelée par-dessus le jeu (raccourci), ou
+        si l'un de ses menus est ouvert : sinon il disparaîtrait avec elle.
+        `tick` : appel de la minuterie (une seconde de plus sans servir)."""
         if sys.platform != "win32" or not self._persist or not self.isVisible():
             return
+        hide_on_fullscreen = bool(self._cfg.get("bar", {}).get("hide_on_fullscreen", True))
+        game = appbar.fullscreen_foreground(int(self.winId())) if hide_on_fullscreen else 0
+        if self._summoned_for and game != self._summoned_for:
+            self._summoned_for = 0          # le jeu n'est plus devant : fin du rappel
+        if self._summoned_for and tick:
+            if self._in_use():
+                self._summon_idle = 0
+            else:
+                self._summon_idle += 1
+                if self._summon_idle >= SUMMON_IDLE_S:
+                    log.info("Barre rappelée inutilisée : elle repasse derrière le jeu.")
+                    self._summoned_for = 0
+        hide = bool(game) and not self._summoned_for and not self._own_popup_open()
+        self._set_behind(hide)
+
+    @staticmethod
+    def _own_popup_open() -> bool:
+        """Un menu ou une fenêtre volante de la barre est ouvert (ils se ferment
+        d'eux-mêmes au premier clic ailleurs : ils ne la retiennent pas longtemps)."""
+        return QApplication.instance().activePopupWidget() is not None
+
+    def _in_use(self) -> bool:
+        """La souris est sur la barre, ou l'un de ses menus est ouvert. (Une
+        fenêtre de la barre au premier plan met fin au rappel d'elle-même :
+        le jeu n'est alors plus devant.)"""
+        return self.geometry().contains(QCursor.pos()) or self._own_popup_open()
+
+    def _set_behind(self, hide: bool) -> None:
+        """Passe la barre derrière le jeu (elle cesse alors de se redessiner),
+        ou la remet au premier plan. Windows n'est sollicité que si l'ordre
+        d'affichage doit vraiment changer : redemander « au-dessus de tout »
+        à chaque seconde passerait la barre devant les autres fenêtres
+        toujours visibles (incrustations de jeu, Discord, OBS…)."""
         from core import winapi
 
-        hide_behind = bool(self._cfg.get("bar", {}).get("hide_on_fullscreen", True)) \
-            and appbar.foreground_fills_screen(int(self.winId()))
-        if hide_behind != self._behind:
-            self._behind = hide_behind
-            log.info("Barre %s.", "passée derrière l'application en plein écran" if hide_behind
+        changed = hide != self._behind
+        if changed:
+            self._behind = hide
+            log.info("Barre %s.", "passée derrière l'application en plein écran" if hide
                      else "remise au premier plan")
-        winapi.user32.SetWindowPos(int(self.winId()), winapi.HWND_BOTTOM if hide_behind
-                                   else winapi.HWND_TOPMOST, 0, 0, 0, 0,
-                                   winapi.SWP_NOMOVE | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE)
+            if hide:
+                QToolTip.hideText()          # une bulle resterait par-dessus le jeu
+            self.setUpdatesEnabled(not hide)
+        hwnd = int(self.winId())
+        topmost = winapi.is_topmost(hwnd)
+        if hide and (changed or topmost):
+            winapi.user32.SetWindowPos(hwnd, winapi.HWND_BOTTOM, 0, 0, 0, 0,
+                                       winapi.SWP_NOMOVE | winapi.SWP_NOSIZE
+                                       | winapi.SWP_NOACTIVATE)
+        elif not hide and (changed or not topmost):
+            winapi.user32.SetWindowPos(hwnd, winapi.HWND_TOPMOST, 0, 0, 0, 0,
+                                       winapi.SWP_NOMOVE | winapi.SWP_NOSIZE
+                                       | winapi.SWP_NOACTIVATE)
+
+    @property
+    def behind(self) -> bool:
+        """La barre est-elle cachée derrière un jeu en plein écran ?"""
+        return self._behind
+
+    def summon(self) -> None:
+        """Raccourci « afficher la barre » : par-dessus le jeu en plein écran,
+        le temps d'ouvrir une fenêtre ou une application ; elle repart toute
+        seule quelques secondes après (ou au raccourci suivant)."""
+        if sys.platform != "win32" or not self._persist:
+            return
+        game = appbar.fullscreen_foreground(int(self.winId()))
+        if self._summoned_for and self._summoned_for == game:
+            self._summoned_for = 0               # deuxième appui : on la renvoie
+        elif game:
+            self._summoned_for, self._summon_idle = game, 0
+            log.info("Barre rappelée par-dessus l'application en plein écran.")
+        self._guard_stacking()
+
+    def bring_to_front(self, window: QWidget) -> None:
+        """Affiche une fenêtre de la barre (réglages, nouveautés…) devant tout,
+        même si un jeu ou une autre application garde le premier plan."""
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        if sys.platform == "win32" and self._persist:
+            from core import winapi
+
+            try:
+                winapi.force_foreground(int(window.winId()))
+            except OSError as exc:
+                log.debug("Fenêtre de la barre pas mise au premier plan : %s", exc)
 
     def apply_config(self) -> None:
         """Après un changement dans les réglages : tout est repris de la config."""
@@ -286,7 +437,7 @@ class TaskbarWindow(QWidget):
         self.build_widgets()
         self.dock()
         self._sync_windows_taskbar()
-        self._register_hotkey()
+        self._register_hotkeys()
 
     # ------------------------------------------- barre des tâches de Windows
     def _sync_windows_taskbar(self) -> None:
@@ -312,27 +463,35 @@ class TaskbarWindow(QWidget):
         self.save()
         self._sync_windows_taskbar()
 
-    # -------------------------------------------------------- raccourci micro
-    def _register_hotkey(self) -> None:
+    # ------------------------------------------------- raccourcis clavier
+    def hotkey_texts(self) -> dict[int, tuple[str, str]]:
+        """Raccourcis globaux : identifiant → (texte de la config, rôle)."""
+        bar = self._cfg.get("bar", {})
+        return {HOTKEY_MIC: (str(self.ctx.widget_cfg("mic").get("hotkey") or ""), "couper le micro"),
+                HOTKEY_SHOW: (str(bar.get("show_hotkey", DEFAULT_SHOW_HOTKEY) or ""),
+                              "afficher la barre par-dessus un jeu")}
+
+    def _register_hotkeys(self) -> None:
         if not self._persist or sys.platform != "win32" or not self.isVisible():
             return
         from core import winapi
 
         hwnd = int(self.winId())
-        if self._hotkey:
-            winapi.user32.UnregisterHotKey(hwnd, HOTKEY_MIC)
-            self._hotkey = False
-        text = str(self.ctx.widget_cfg("mic").get("hotkey") or "")
-        parsed = shell.parse_hotkey(text)
-        if parsed is None:
-            if text.strip():
-                log.warning("Raccourci du micro « %s » incompris.", text)
-            return
-        modifiers, key = parsed
-        self._hotkey = bool(winapi.user32.RegisterHotKey(hwnd, HOTKEY_MIC,
-                                                         modifiers | shell.MOD_NOREPEAT, key))
-        if not self._hotkey:
-            log.warning("Raccourci du micro « %s » déjà pris par une autre application.", text)
+        for hotkey in self._hotkeys:
+            winapi.user32.UnregisterHotKey(hwnd, hotkey)
+        self._hotkeys.clear()
+        for hotkey, (text, role) in self.hotkey_texts().items():
+            parsed = shell.parse_hotkey(text)
+            if parsed is None:
+                if text.strip():
+                    log.warning("Raccourci « %s » (%s) incompris.", text, role)
+                continue
+            modifiers, key = parsed
+            if winapi.user32.RegisterHotKey(hwnd, hotkey, modifiers | shell.MOD_NOREPEAT, key):
+                self._hotkeys.add(hotkey)
+            else:
+                log.warning("Raccourci « %s » (%s) déjà pris par une autre application.",
+                            text, role)
 
     def toggle_mic(self) -> None:
         """Coupe ou rouvre le micro (raccourci clavier global)."""
@@ -349,6 +508,9 @@ class TaskbarWindow(QWidget):
                 msg = ctypes.wintypes.MSG.from_address(int(message))
                 if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_MIC:
                     self.toggle_mic()
+                    return True, 0
+                if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_SHOW:
+                    self.summon()
                     return True, 0
                 if self._appbar is not None and msg.message == self._appbar.callback_message:
                     self._on_appbar_event(int(msg.wParam), int(msg.lParam))
@@ -370,7 +532,7 @@ class TaskbarWindow(QWidget):
         elif code == appbar.ABN_FULLSCREENAPP:
             # Windows signale un plein écran : on vérifie tout de suite, sans attendre
             # la prochaine seconde (la vérification fait foi, la notification déclenche)
-            self._guard_stacking()
+            QTimer.singleShot(0, self._guard_stacking)
 
     # --------------------------------------------------------------- commandes
     def save(self) -> None:
@@ -384,6 +546,8 @@ class TaskbarWindow(QWidget):
         self._mixer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._mixer.destroyed.connect(lambda *_a: setattr(self, "_mixer", None))
         self._mixer.show_near(anchor or self.widgets.get("strips") or self)
+        if self._behind:            # ouverte depuis le menu de l'icône, en plein jeu
+            self.bring_to_front(self._mixer)
 
     def open_settings(self, tab: str = "") -> None:
         from ui.settings_dialog import SettingsDialog
@@ -395,9 +559,7 @@ class TaskbarWindow(QWidget):
             self._settings.finished.connect(lambda *_a: setattr(self, "_settings", None))
             self._settings.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._settings.select_tab(tab)
-        self._settings.show()
-        self._settings.raise_()
-        self._settings.activateWindow()
+        self.bring_to_front(self._settings)
 
     def _on_settings_applied(self) -> None:
         self.save()
@@ -458,9 +620,7 @@ class TaskbarWindow(QWidget):
 
         dialog = NotesDialog(since)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        self.bring_to_front(dialog)
         self._notes = dialog
 
     def check_for_updates(self) -> None:
@@ -494,6 +654,7 @@ class TaskbarWindow(QWidget):
         redémarre pas sous ses doigts."""
         app = QApplication.instance()
         return bool(self._settings is not None or self._mixer is not None or self._behind
+                    or self._summoned_for
                     or app.activePopupWidget() is not None or app.activeModalWidget() is not None)
 
     def install_ready_update(self, update, path, force: bool = False) -> None:
@@ -532,15 +693,18 @@ class TaskbarWindow(QWidget):
         self._closing = True
         self._rehide.stop()
         self._guard.stop()
+        self._dock_later.stop()
         if self._mixer is not None:
             self._mixer.close()
         if self._settings is not None:
             self._settings.close()
         if sys.platform == "win32" and self._persist:
-            if self._hotkey:
+            if self._hotkeys:
                 from core import winapi
 
-                winapi.user32.UnregisterHotKey(int(self.winId()), HOTKEY_MIC)
+                for hotkey in self._hotkeys:
+                    winapi.user32.UnregisterHotKey(int(self.winId()), hotkey)
+                self._hotkeys.clear()
             if self._appbar is not None:
                 self._appbar.remove()
             if self._taskbar_hidden:

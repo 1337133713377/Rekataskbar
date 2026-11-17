@@ -33,3 +33,21 @@ def test_save_is_atomic_and_readable(cfg):
     config.save_config(cfg)
     assert config.read_json(config.user_config_path())["bar"]["height"] == 50
     assert not config.user_config_path().with_suffix(".tmp").exists()
+
+
+def test_media_player_moves_to_the_middle_once(appdata):
+    path = config.user_config_path()
+    path.write_text(json.dumps({"layout": {"left": ["start", "media", "tasks"], "center": [],
+                                           "right": ["clock"]}}), encoding="utf-8")
+    cfg = config.load_config()
+    assert cfg["layout"] == {"left": ["start", "tasks"], "center": ["media"], "right": ["clock"]}
+    assert config.read_json(path)["layout_version"] == config.LAYOUT_VERSION
+    cfg["layout"]["center"] = []                         # retiré ensuite : c'est respecté
+    config.save_config(cfg)
+    assert config.load_config()["layout"]["center"] == []
+
+
+def test_new_config_has_the_player_in_the_middle(appdata):
+    cfg = config.load_config()
+    assert cfg["layout"]["center"] == ["media"] and cfg["layout_version"] == config.LAYOUT_VERSION
+    assert cfg["bar"]["show_hotkey"] == "Ctrl+Alt+B" and cfg["widgets"]["media"]["show_idle"]

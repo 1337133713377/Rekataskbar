@@ -44,6 +44,26 @@ def test_open_windows_are_enumerated_without_error(real_windows):
     own.close()
 
 
+def test_minimized_window_is_restored_and_brought_to_front(real_windows):
+    qapp = real_windows
+    from PySide6.QtWidgets import QWidget
+
+    from conftest import wait_for
+    from core import winapi
+    from core.windows import Win32Windows
+
+    window = QWidget()
+    window.setWindowTitle("Fenêtre réduite")
+    window.resize(300, 200)
+    window.show()
+    window.showMinimized()
+    hwnd = int(window.winId())
+    assert wait_for(qapp, lambda: winapi.user32.IsIconic(hwnd))
+    Win32Windows().activate(hwnd)
+    assert wait_for(qapp, lambda: not winapi.user32.IsIconic(hwnd))
+    window.close()
+
+
 def test_appbar_reserves_and_releases_screen_space(real_windows):
     qapp = real_windows
     from PySide6.QtCore import Qt

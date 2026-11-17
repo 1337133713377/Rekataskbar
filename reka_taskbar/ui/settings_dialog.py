@@ -138,6 +138,15 @@ class SettingsDialog(QDialog):
         self.fullscreen.setChecked(bool(bar.get("hide_on_fullscreen", True)))
         form.addRow(self.fullscreen)
 
+        from ui.bar import DEFAULT_SHOW_HOTKEY
+
+        self.show_hotkey = QLineEdit(str(bar.get("show_hotkey", DEFAULT_SHOW_HOTKEY) or ""))
+        self.show_hotkey.setPlaceholderText("Ctrl+Alt+B, F14… (vide : aucun)")
+        self.show_hotkey.setToolTip("En plein jeu : la barre revient par-dessus le jeu, le temps "
+                                    "d'ouvrir une fenêtre ou une application ; elle repart toute "
+                                    "seule quelques secondes après, ou au deuxième appui.")
+        form.addRow("Raccourci « afficher la barre en jeu »", self.show_hotkey)
+
         self.hide_taskbar = QCheckBox("Cacher la barre des tâches de Windows")
         self.hide_taskbar.setChecked(bool(bar.get("hide_windows_taskbar", False)))
         form.addRow(self.hide_taskbar)
@@ -219,6 +228,9 @@ class SettingsDialog(QDialog):
         self.task_labels = QCheckBox("Afficher le titre des fenêtres à côté de leur icône")
         self.task_labels.setChecked(bool(options.get("tasks", {}).get("labels", False)))
         form.addRow("Fenêtres", self.task_labels)
+        self.media_idle = QCheckBox("Toujours afficher le lecteur, même quand rien ne joue")
+        self.media_idle.setChecked(bool(options.get("media", {}).get("show_idle", True)))
+        form.addRow("Musique", self.media_idle)
         self.city = QLineEdit(str(options.get("weather", {}).get("city") or ""))
         self.city.setPlaceholderText("Paris, Lyon, Montréal… (vide : pas de météo)")
         form.addRow("Ville de la météo", self.city)
@@ -355,6 +367,7 @@ class SettingsDialog(QDialog):
         bar["screen"] = self.screen.currentData()
         bar["reserve_space"] = self.reserve.isChecked()
         bar["hide_on_fullscreen"] = self.fullscreen.isChecked()
+        bar["show_hotkey"] = self.show_hotkey.text().strip()
         bar["compact"] = self.compact.isChecked()
         bar["hide_windows_taskbar"] = self.hide_taskbar.isChecked()
 
@@ -368,6 +381,7 @@ class SettingsDialog(QDialog):
         widgets.setdefault("clock", {}).update(seconds=self.clock_seconds.isChecked(),
                                                date=self.clock_date.isChecked())
         widgets.setdefault("tasks", {})["labels"] = self.task_labels.isChecked()
+        widgets.setdefault("media", {})["show_idle"] = self.media_idle.isChecked()
         widgets.setdefault("weather", {})["city"] = self.city.text().strip()
         widgets.setdefault("mic", {}).update(strip=int(self.mic_strip.currentData()),
                                              hotkey=self.hotkey.text().strip())

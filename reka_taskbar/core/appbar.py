@@ -83,27 +83,42 @@ def covers(window: Rect, monitor: Rect) -> bool:
 
 # Fenêtres du bureau : elles couvrent l'écran sans être un jeu
 DESKTOP_CLASSES = ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd")
+WS_CAPTION = 0x00C00000
 
 
-def foreground_fills_screen(own_hwnd: int) -> bool:
-    """Une autre application plein écran est-elle au premier plan, sur le même
-    écran que la barre ? Lu directement (pas via une notification de Windows,
-    qui peut manquer quand un jeu quitte le plein écran, par exemple après
-    Ctrl+Échap)."""
-    if sys.platform != "win32":
+def is_fullscreen(window: Rect, monitor: Rect, *, style: int = 0, zoomed: bool = False,
+                  class_name: str = "") -> bool:
+    """Une fenêtre est-elle en plein écran sur cet écran ? Elle doit le couvrir
+    entièrement, et ne pas être le bureau ni une fenêtre simplement agrandie :
+    agrandie avec sa barre de titre, ses bords invisibles débordent de l'écran
+    quand rien n'y est réservé, sans que ce soit un plein écran."""
+    if class_name in DESKTOP_CLASSES:
         return False
-    import ctypes
+    if zoomed and style & WS_CAPTION == WS_CAPTION:
+        return False
+    return covers(window, monitor)
+
+
+def fullscreen_foreground(own_hwnd: int) -> int:
+    """La fenêtre au premier plan si c'est une application plein écran (jeu,
+    vidéo) sur le même écran que la barre, sinon 0. Lu directement à chaque
+    appel (pas via une notification de Windows, qui peut manquer quand un jeu
+    quitte le plein écran, par exemple après Ctrl+Échap). Les fenêtres de la
+    barre elle-même (réglages, mini-console…) ne comptent jamais."""
+    if sys.platform != "win32":
+        return 0
     from ctypes import wintypes
 
     from core import winapi
 
     foreground = int(winapi.user32.GetForegroundWindow() or 0)
-    if not foreground or foreground == own_hwnd or winapi.class_name(foreground) in DESKTOP_CLASSES:
-        return False
-    monitor_flag = 2                                   # MONITOR_DEFAULTTONEAREST
+    if not foreground or foreground == own_hwnd:
+        return 0
+    if winapi.window_pid(foreground) == int(winapi.kernel32.GetCurrentProcessId()):
+        return 0
 
     def monitor_of(hwnd: int):
-        handle = int(winapi.user32.MonitorFromWindow(hwnd, monitor_flag) or 0)
+        handle = int(winapi.user32.MonitorFromWindow(hwnd, winapi.MONITOR_DEFAULTTONEAREST) or 0)
         info = winapi.MONITORINFOEXW()
         info.cbSize = ctypes.sizeof(info)
         if not handle or not winapi.user32.GetMonitorInfoW(handle, ctypes.byref(info)):
@@ -114,11 +129,28 @@ def foreground_fills_screen(own_hwnd: int) -> bool:
     own_handle, own_rect = monitor_of(own_hwnd)
     fg_handle, fg_rect = monitor_of(foreground)
     if own_rect is None or fg_rect is None or own_handle != fg_handle:
-        return False
+        return 0
     window = wintypes.RECT()
     if not winapi.user32.GetWindowRect(foreground, ctypes.byref(window)):
-        return False
-    return covers((window.left, window.top, window.right, window.bottom), own_rect)
+        return 0
+    style = int(winapi.user32.GetWindowLongW(foreground, winapi.GWL_STYLE)) & 0xFFFFFFFF
+    name = winapi.class_name(foreground)
+    if is_fullscreen((window.left, window.top, window.right, window.bottom), own_rect,
+                     style=style, zoomed=bool(winapi.user32.IsZoomed(foreground)),
+                     class_name=name):
+        return foreground
+    # Plein écran exclusif (Direct3D) : pendant un changement de résolution, la
+    # fenêtre du jeu (sans barre de titre) peut ne pas encore couvrir l'écran
+    if (name not in DESKTOP_CLASSES and style & WS_CAPTION != WS_CAPTION
+            and winapi.exclusive_fullscreen()):
+        return foreground
+    return 0
+
+
+def foreground_fills_screen(own_hwnd: int) -> bool:
+    """Une autre application plein écran est-elle au premier plan, sur le même
+    écran que la barre ?"""
+    return bool(fullscreen_foreground(own_hwnd))
 
 
 def list_monitors() -> list[Monitor]:
@@ -170,10 +202,13 @@ class AppBar:
         return data
 
     def dock(self, edge: str, height_px: int, device: str = "", reserve: bool = True,
-             origin: tuple[int, int] | None = None) -> Rect | None:
+             origin: tuple[int, int] | None = None, behind: bool = False) -> Rect | None:
         """Place la fenêtre sur le bord `edge` de l'écran `device` (ou de celui
         qui contient `origin`) ; avec `reserve`, Windows garde cette bande
-        libre. Renvoie le rectangle obtenu."""
+        libre. Renvoie le rectangle obtenu. `behind` : un jeu plein écran est
+        devant, la barre reste derrière lui (un changement de résolution du jeu
+        redemande l'ancrage : remonter la barre à ce moment le ferait sortir
+        du plein écran)."""
         if not self.supported:
             return None
         api = self._api
@@ -204,7 +239,8 @@ class AppBar:
                 rect = (data.rc.left, data.rc.top, data.rc.right, data.rc.bottom)
         else:
             self.remove()
-        api.user32.SetWindowPos(self._hwnd, api.HWND_TOPMOST, rect[0], rect[1],
+        api.user32.SetWindowPos(self._hwnd, api.HWND_BOTTOM if behind else api.HWND_TOPMOST,
+                                rect[0], rect[1],
                                 rect[2] - rect[0], rect[3] - rect[1], api.SWP_NOACTIVATE)
         return rect
 

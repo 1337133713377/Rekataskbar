@@ -1,5 +1,7 @@
 """La barre en démo : widgets, mini-console, réglages."""
 
+import sys
+
 from PySide6.QtCore import QDate, QLocale, QPoint, QPointF, QRect, QSize, Qt, QTime
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
@@ -8,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from conftest import pump, wait_for
 from core.reka_link import RekaSetup
 from ui import styles
-from ui.bar import WIDGETS, bar_geometry, bar_height, normalized_layout
+from ui.bar import WIDGETS, bar_geometry, bar_height, centered_columns, normalized_layout
 from ui.mixer_popup import db_to_position, position_to_db
 from ui.popup import place
 from ui.widgets.base import format_db, level_fraction
@@ -77,7 +79,100 @@ def qapp_of(taskbar):
 
 def test_guard_is_harmless_outside_windows(taskbar):
     taskbar.bar._guard_stacking()          # ne lève rien, ne fait rien hors Windows
+    taskbar.bar.summon()
     assert taskbar.bar._behind is False
+
+
+class FakeWinApi:
+    """Ce que la barre demande à Windows pour se placer, sans Windows."""
+
+    HWND_TOP, HWND_TOPMOST, HWND_BOTTOM = 0, -1, 1
+    SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x1, 0x2, 0x10
+
+    def __init__(self):
+        self.calls = []
+        self.topmost = True
+        self.foreground = []
+        api = self
+
+        class User32:
+            def SetWindowPos(self, _hwnd, after, *_rest):     # noqa: N802
+                api.calls.append(after)
+                api.topmost = after == api.HWND_TOPMOST
+                return True
+
+        self.user32 = User32()
+
+    def is_topmost(self, _hwnd):
+        return self.topmost
+
+    def force_foreground(self, hwnd):
+        self.foreground.append(hwnd)
+        return True
+
+
+def test_bar_goes_behind_fullscreen_games_and_can_be_summoned(qapp, taskbar, monkeypatch):
+    import types
+
+    import core
+    import ui.bar as bar_module
+    from core import appbar
+
+    bar = taskbar.bar
+    api = FakeWinApi()
+    monkeypatch.setitem(sys.modules, "core.winapi", api)
+    monkeypatch.setattr(core, "winapi", api, raising=False)
+    monkeypatch.setattr(bar_module, "sys", types.SimpleNamespace(platform="win32",
+                                                                 executable=sys.executable))
+    monkeypatch.setattr(bar_module, "QCursor", types.SimpleNamespace(pos=lambda: QPoint(-999, -999)))
+    game = {"hwnd": 0}
+    monkeypatch.setattr(appbar, "fullscreen_foreground", lambda _own: game["hwnd"])
+    monkeypatch.setattr(bar, "_persist", True)
+    try:
+        bar._guard_stacking()
+        assert not bar.behind and api.calls == []              # déjà devant : rien demandé
+        game["hwnd"] = 777                                     # un jeu passe en plein écran
+        bar._guard_stacking()
+        assert bar.behind and api.calls == [api.HWND_BOTTOM] and not bar.updatesEnabled()
+        assert bar.is_busy()                                   # pas de mise à jour en plein jeu
+        bar._guard_stacking(tick=True)
+        bar._guard_stacking(tick=True)
+        assert api.calls == [api.HWND_BOTTOM]                  # pas de va-et-vient chaque seconde
+        tasks = bar.widgets["tasks"]
+        before = len(tasks.buttons)
+        taskbar.windows.close(tasks.buttons[0].info.hwnd)
+        tasks.refresh()
+        assert len(tasks.buttons) == before                    # derrière le jeu : plus de relevé
+
+        bar.summon()                                           # raccourci : la barre revient
+        assert not bar.behind and api.calls[-1] == api.HWND_TOPMOST and bar.updatesEnabled()
+        for _second in range(bar_module.SUMMON_IDLE_S - 1):
+            bar._guard_stacking(tick=True)
+        assert not bar.behind                                  # encore un instant…
+        bar._guard_stacking(tick=True)
+        assert bar.behind and api.calls[-1] == api.HWND_BOTTOM  # …puis elle repart seule
+
+        bar.summon()
+        bar.summon()                                           # deuxième appui : renvoyée
+        assert bar.behind
+
+        api.topmost = True                                     # Qt l'a remontée : on la recache
+        bar._guard_stacking()
+        assert api.calls[-1] == api.HWND_BOTTOM
+
+        game["hwnd"] = 0                                       # le jeu quitte le plein écran
+        bar._guard_stacking()
+        assert not bar.behind and api.calls[-1] == api.HWND_TOPMOST
+        api.topmost = False                                    # quelqu'un lui a retiré « au-dessus »
+        bar._guard_stacking()
+        assert api.calls[-1] == api.HWND_TOPMOST and api.topmost
+
+        bar.open_settings("")                                  # fenêtre de la barre : devant tout
+        assert api.foreground and api.foreground[-1] == int(bar._settings.winId())
+        bar._settings.close()
+    finally:
+        bar._behind = False
+        bar.setUpdatesEnabled(True)
 
 
 def test_geometry_helpers():
@@ -88,6 +183,12 @@ def test_geometry_helpers():
     assert below == QPoint(749, 46)
     above = place(QRect(1850, 1042, 60, 32), QSize(400, 300), screen)    # barre en bas, au bord
     assert above.y() == 1042 - 8 - 300 and above.x() == 1920 - 8 - 400
+
+
+def test_centered_columns():
+    assert centered_columns(1904, 300, 200, 700, 12) == 790    # 790 + 12 + 300 + 12 + 790
+    assert centered_columns(1904, 300, 200, 900, 12) == 0      # pas la place : pas de centrage forcé
+    assert centered_columns(1904, 0, 200, 300, 12) == 0        # rien au milieu
 
 
 def test_clock_texts():
@@ -197,7 +298,78 @@ def test_media_widget(qapp, taskbar):
     media.play.click()
     assert media.play.name == "play"
     taskbar.media._publish(None)                               # plus rien ne joue
+    assert media.isVisible() and media.title.text == "Aucune lecture"   # le lecteur reste
+    assert not media.play.isVisible() and media.progress == 0.0
+    media.show_idle = False                                    # option « toujours afficher »
+    media._show(None)
     assert not media.isVisible()
+
+
+def test_media_widget_shows_track_progress(qapp, taskbar):
+    media = taskbar.bar.widgets["media"]
+    info = taskbar.media.current
+    assert info.duration == 214.0 and info.can_seek
+    assert 0.3 < media.progress < 0.4                          # 71 s sur 214
+    assert media.title.two_lines                               # barre de 44 px : titre / artiste
+    taskbar.media.seek(107.0)
+    assert abs(media.progress - 0.5) < 0.02
+    assert not media.grab().isNull()
+
+
+def test_media_player_popup(qapp, taskbar):
+    media = taskbar.bar.widgets["media"]
+    QTest.mouseClick(media, Qt.MouseButton.LeftButton, pos=QPoint(8, media.height() // 2))
+    popup = media._popup
+    assert popup is not None and popup.isVisible()
+    assert popup.title.text() == "Néons de minuit" and popup.artist.text() == "Les Ondes"
+    assert popup.album.text() == "Nuit blanche" and popup.cover.has_cover
+    assert popup.total.text() == "3:34" and popup.seek.seekable
+    popup.seek.seeked.emit(30.0)                               # clic sur la frise
+    assert abs(taskbar.media.current.position_at() - 30.0) < 1.0
+    popup.next.click()
+    assert popup.title.text() == "Ligne de basse" and media.title.text.startswith("Ligne de basse")
+    popup.play.click()
+    assert popup.play.name == "play" and media.play.name == "play"
+    assert not popup.grab().isNull()
+    taskbar.media._publish(None)
+    assert popup.title.text() == "Rien en lecture" and not popup.seek.isVisible()
+    popup.close()
+    pump(qapp, 0.05)
+
+
+def test_media_player_shows_the_playing_app(qapp, taskbar):
+    from ui.media_player import MediaPopup
+
+    popup = MediaPopup(taskbar.media, taskbar.windows)
+    assert popup.open_app.text() == "Afficher Spotify"
+    spotify = next(w for w in taskbar.windows.windows() if w.app == "Spotify")
+    taskbar.windows.minimize(spotify.hwnd)
+    assert popup.show_app()
+    window = next(w for w in taskbar.windows.windows() if w.app == "Spotify")
+    assert window.active and not window.minimized
+    actions = [label for label, _c in taskbar.bar.widgets["media"].menu_actions()]
+    assert actions == ["Ouvrir le lecteur…", "Afficher Spotify"]
+
+
+def test_media_player_is_in_the_middle_of_the_bar(qapp, taskbar):
+    bar = taskbar.bar
+    assert "media" in normalized_layout(taskbar.cfg)["center"]
+    media = bar.widgets["media"]
+
+    def offset() -> float:
+        pump(qapp, 0.1)
+        return media.mapTo(bar, media.rect().center()).x() - bar.width() / 2
+
+    # Démo : la zone de droite (tout affiché) dépasse la moitié de la barre ; le
+    # lecteur est alors aussi près du centre que possible, la droite au plus juste
+    right = bar._zones["right"]
+    assert abs(offset()) < 80 and right.width() == right.minimumSizeHint().width()
+    taskbar.cfg["layout"]["right"] = ["strips", "mic", "headphone", "clock"]
+    bar.build_widgets()
+    media = bar.widgets["media"]
+    assert abs(offset()) <= 1                                  # la place : centre exact
+    taskbar.media.next()                                       # titre d'une autre longueur
+    assert abs(offset()) <= 1
 
 
 def test_tasks_widget(qapp, taskbar):
@@ -222,6 +394,34 @@ def test_tasks_overflow_keeps_the_active_window(qapp, taskbar):
     shown = [b for b in tasks.buttons if b.isVisible()]
     assert tasks.buttons[5] in shown and len(shown) < 6
     assert tasks.overflow.isVisible() and tasks.overflow.text == f"+{6 - len(shown)}"
+
+
+def test_tasks_overflow_menu_opens_hidden_and_minimized_windows(qapp, taskbar):
+    tasks = taskbar.bar.widgets["tasks"]
+    taskbar.windows.minimize(tasks.buttons[4].info.hwnd)       # l'Explorateur, réduit
+    tasks.setMaximumWidth(120)
+    tasks.resize(120, tasks.height())
+    tasks.refresh()
+    pump(qapp, 0.05)
+    hidden = tasks.hidden_windows
+    assert hidden and len(hidden) == 6 - len([b for b in tasks.buttons if b.isVisible()])
+    menu = tasks.overflow_menu()
+    labels = [a.text() for a in menu.actions()]
+    assert any(label.endswith("(réduite)") for label in labels)
+    target = next(i for i, info in enumerate(hidden) if info.minimized)
+    menu.actions()[target].trigger()
+    window = next(w for w in taskbar.windows.windows() if w.hwnd == hidden[target].hwnd)
+    assert window.active and not window.minimized
+
+
+def test_minimized_window_comes_back_on_click(qapp, taskbar):
+    tasks = taskbar.bar.widgets["tasks"]
+    button = tasks.buttons[2]
+    taskbar.windows.minimize(button.info.hwnd)
+    tasks.refresh()
+    assert tasks.buttons[2].info.minimized
+    QTest.mouseClick(tasks.buttons[2], Qt.MouseButton.LeftButton)
+    assert tasks.buttons[2].info.active and not tasks.buttons[2].info.minimized
 
 
 def test_shortcuts_weather_battery_and_system(qapp, taskbar):
@@ -331,6 +531,9 @@ def test_settings_apply_writes_config_and_rebuilds(qapp, taskbar):
     dialog.task_labels.setChecked(True)
     dialog.city.setText("  Lyon ")
     dialog.hotkey.setText("Ctrl+Alt+M")
+    assert dialog.show_hotkey.text() == "Ctrl+Alt+B" and dialog.media_idle.isChecked()
+    dialog.show_hotkey.setText(" F14 ")
+    dialog.media_idle.setChecked(False)
     dialog.mic_strip.setCurrentIndex(dialog.mic_strip.findData(1))
     dialog.follow_reka.setChecked(False)
     dialog.theme.setCurrentIndex(dialog.theme.findData("violet"))
@@ -343,6 +546,9 @@ def test_settings_apply_writes_config_and_rebuilds(qapp, taskbar):
         assert cfg["widgets"]["clock"]["seconds"] and cfg["widgets"]["tasks"]["labels"]
         assert cfg["widgets"]["weather"]["city"] == "Lyon"
         assert cfg["widgets"]["mic"] == {"strip": 1, "hotkey": "Ctrl+Alt+M"}
+        assert cfg["bar"]["show_hotkey"] == "F14" and cfg["widgets"]["media"]["show_idle"] is False
+        assert taskbar.bar.hotkey_texts()[2][0] == "F14"
+        assert not taskbar.bar.widgets["media"].show_idle
         assert cfg["shortcuts"][-1] == {"name": "jeu", "path": "C:\\Jeux\\jeu.exe"}
         bar = taskbar.bar
         assert "start" not in bar.widgets and "network" in bar.widgets

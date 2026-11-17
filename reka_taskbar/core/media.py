@@ -19,7 +19,8 @@ import logging
 import sys
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 
 from PySide6.QtCore import QObject, Signal
 
@@ -56,6 +57,60 @@ class MediaInfo:
     can_next: bool = True
     can_play_pause: bool = True
     cover: bytes = b""
+    position: float = 0.0         # secondes écoulées, au moment `updated`
+    duration: float = 0.0         # secondes (0 : inconnue, radio, direct)
+    can_seek: bool = False
+    updated: float = field(default=0.0, compare=False)    # time.monotonic() de la lecture
+
+    def position_at(self, now: float | None = None) -> float:
+        """Position estimée à l'instant `now` (time.monotonic()) : elle avance
+        toute seule pendant la lecture, entre deux relevés."""
+        position = self.position
+        if self.playing:
+            now = time.monotonic() if now is None else now
+            position += max(0.0, now - self.updated)
+        if self.duration > 0:
+            position = min(position, self.duration)
+        return max(0.0, position)
+
+
+def format_time(seconds: float) -> str:
+    """« 3:07 », « 1:02:45 »."""
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def to_seconds(value) -> float:
+    """Durée WinRT (TimeSpan) en secondes : timedelta, nombre de « ticks » de
+    100 ns, ou objet avec un champ `duration`."""
+    if value is None:
+        return 0.0
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    if isinstance(value, (int, float)):
+        return float(value) / 10_000_000
+    ticks = getattr(value, "duration", None)
+    return float(ticks) / 10_000_000 if isinstance(ticks, (int, float)) else 0.0
+
+
+def timeline_position(position: float, start: float, end: float, last_update,
+                      playing: bool, now: datetime | None = None) -> tuple[float, float]:
+    """(position, durée) d'après la frise de Windows : la position est celle du
+    dernier relevé de l'application (`last_update`) ; pendant la lecture, on y
+    ajoute le temps écoulé depuis."""
+    duration = max(0.0, end - start)
+    position -= start
+    if playing and isinstance(last_update, datetime):
+        if last_update.tzinfo is None:
+            last_update = last_update.replace(tzinfo=timezone.utc)
+        elapsed = ((now or datetime.now(timezone.utc)) - last_update).total_seconds()
+        if 0 < elapsed < 24 * 3600:
+            position += elapsed
+    if duration > 0:
+        position = min(position, duration)
+    return max(0.0, position), duration
 
 
 def app_label(app_id: str) -> str:
@@ -99,10 +154,26 @@ class MediaBackend(QObject):
     def previous(self) -> None:
         pass
 
+    def seek(self, seconds: float) -> None:
+        """Va à `seconds` dans le morceau (si l'application le permet)."""
+
     def _publish(self, info: MediaInfo | None) -> None:
-        if info != self._current:
-            self._current = info
-            self.changed.emit(info)
+        if info == self._current or same_track_on_time(self._current, info):
+            return
+        self._current = info
+        self.changed.emit(info)
+
+
+DRIFT_S = 1.5                 # écart toléré entre la position estimée et la position lue
+
+
+def same_track_on_time(old: MediaInfo | None, new: MediaInfo | None) -> bool:
+    """Rien n'a changé sauf la position, qui avance comme prévu : inutile de
+    tout redessiner à chaque relevé (la barre fait avancer la frise seule)."""
+    if old is None or new is None or replace(old, position=0.0) != replace(new, position=0.0):
+        return False
+    now = time.monotonic()
+    return abs(old.position_at(now) - new.position_at(now)) < DRIFT_S
 
 
 class NullMedia(MediaBackend):
@@ -121,31 +192,49 @@ class DemoMedia(MediaBackend):
         ("Ligne de basse", "Studio 206", "Sessions", "Deezer", "#ff4fb8", "#ff9a1f"),
         ("Retour au calme", "Regrettable", "REKA", "Chrome", "#00e5ff", "#00ff88"),
     )
+    DURATIONS = (214.0, 187.0, 243.0)
+    START_AT = 71.0               # la démo démarre en cours de morceau
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._index = 0
         self._playing = True
+        self._position = self.START_AT
+        self._since = time.monotonic()
         self._covers: dict[int, bytes] = {}
 
     def start(self) -> None:
         self._emit()
 
+    def _elapsed(self) -> float:
+        position = self._position + (time.monotonic() - self._since if self._playing else 0.0)
+        return min(position, self.DURATIONS[self._index])
+
     def play_pause(self) -> None:
+        self._position, self._since = self._elapsed(), time.monotonic()
         self._playing = not self._playing
         self._emit()
 
     def next(self) -> None:
         self._index = (self._index + 1) % len(self.TRACKS)
+        self._position, self._since = 0.0, time.monotonic()
         self._emit()
 
     def previous(self) -> None:
         self._index = (self._index - 1) % len(self.TRACKS)
+        self._position, self._since = 0.0, time.monotonic()
+        self._emit()
+
+    def seek(self, seconds: float) -> None:
+        self._position = max(0.0, min(float(seconds), self.DURATIONS[self._index]))
+        self._since = time.monotonic()
         self._emit()
 
     def _emit(self) -> None:
         title, artist, album, app, _a, _b = self.TRACKS[self._index]
-        self._publish(MediaInfo(title, artist, album, app, self._playing, cover=self._cover()))
+        self._publish(MediaInfo(title, artist, album, app, self._playing, cover=self._cover(),
+                                position=self._elapsed(), duration=self.DURATIONS[self._index],
+                                can_seek=True, updated=time.monotonic()))
 
     def _cover(self) -> bytes:
         if self._index not in self._covers:
@@ -254,7 +343,7 @@ class WindowsMedia(MediaBackend):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._lock = threading.Lock()
-        self._commands: list[str] = []
+        self._commands: list[tuple[str, float]] = []
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -282,9 +371,14 @@ class WindowsMedia(MediaBackend):
     def previous(self) -> None:
         self._command("previous")
 
-    def _command(self, name: str) -> None:
+    def seek(self, seconds: float) -> None:
+        self._command("seek", seconds)
+
+    def _command(self, name: str, value: float = 0.0) -> None:
         with self._lock:
-            self._commands.append(name)
+            if name == "seek":          # seul le dernier saut compte (curseur glissé)
+                self._commands = [c for c in self._commands if c[0] != "seek"]
+            self._commands.append((name, value))
         self._wake.set()
 
     def _run(self) -> None:
@@ -331,12 +425,14 @@ class WindowsMedia(MediaBackend):
             commands, self._commands = self._commands, []
         if session is None:
             return False
-        actions = {"play_pause": session.try_toggle_play_pause_async,
-                   "next": session.try_skip_next_async,
-                   "previous": session.try_skip_previous_async}
-        for name in commands:
+        actions = {"play_pause": lambda _v: session.try_toggle_play_pause_async(),
+                   "next": lambda _v: session.try_skip_next_async(),
+                   "previous": lambda _v: session.try_skip_previous_async(),
+                   "seek": lambda v: session.try_change_playback_position_async(
+                       int(max(0.0, v) * 10_000_000))}
+        for name, value in commands:
             try:
-                winrt_wait(actions[name]())
+                winrt_wait(actions[name](value))
             except Exception as exc:
                 log.warning("Commande média « %s » refusée : %s", name, exc)
         return bool(commands)
@@ -356,15 +452,30 @@ class WindowsMedia(MediaBackend):
             return bool(getattr(controls, name, True)) if controls is not None else True
 
         status = getattr(playback, "playback_status", 0)
+        playing = int(status) == PLAYING
+        position = duration = 0.0
+        try:
+            timeline = session.get_timeline_properties()
+            rate = getattr(playback, "playback_rate", None)
+            position, duration = timeline_position(
+                to_seconds(timeline.position), to_seconds(timeline.start_time),
+                to_seconds(timeline.end_time), getattr(timeline, "last_updated_time", None),
+                playing and (rate is None or float(rate or 0) > 0))
+        except Exception as exc:          # frise absente (radio, direct, vieille application)
+            log.debug("Frise du morceau illisible : %s", exc)
         info = MediaInfo(
             title=title,
             artist=str(props.artist or "").strip(),
             album=str(props.album_title or "").strip(),
             app=app_label(str(session.source_app_user_model_id or "")),
-            playing=int(status) == PLAYING,
+            playing=playing,
             can_previous=enabled("is_previous_enabled"),
             can_next=enabled("is_next_enabled"),
             can_play_pause=enabled("is_play_pause_toggle_enabled"),
+            position=position,
+            duration=duration,
+            can_seek=duration > 0 and enabled("is_playback_position_enabled"),
+            updated=time.monotonic(),
         )
         return info, props.thumbnail
 

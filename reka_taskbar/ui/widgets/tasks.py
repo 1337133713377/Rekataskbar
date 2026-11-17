@@ -1,15 +1,16 @@
 """
 Fenêtres ouvertes : un bouton par fenêtre, comme dans la barre de Windows.
 
-Clic : afficher la fenêtre (ou la réduire si elle est déjà devant).
-Clic du milieu : la fermer. Les boutons qui ne tiennent pas dans la largeur
-disponible sont repliés derrière un compteur « +3 ».
+Clic : afficher la fenêtre, réduite ou non (ou la réduire si elle est déjà
+devant). Clic du milieu : la fermer. Les boutons qui ne tiennent pas dans la
+largeur disponible sont repliés derrière un compteur « +3 » : un clic dessus
+liste ces fenêtres, pour les afficher.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QMenu, QSizePolicy, QWidget
 
 from core.windows import WindowInfo
@@ -111,6 +112,33 @@ class TaskButton(QWidget):
                                 1.5, 1.5)
 
 
+class OverflowButton(Text):
+    """Compteur « +3 » des fenêtres qui ne tiennent pas dans la barre ; un
+    clic ouvre leur liste."""
+
+    clicked = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("", role="TEXT_SECONDARY", size=11, weight=QFont.Weight.DemiBold,
+                         parent=parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        hint = super().sizeHint()
+        return QSize(hint.width() + 10, hint.height())
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        event.accept() if event.button() == Qt.MouseButton.LeftButton else event.ignore()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+                event.position().toPoint()):
+            self.clicked.emit()
+        else:
+            event.ignore()
+
+
 class TasksWidget(QWidget):
     key = "tasks"
 
@@ -124,8 +152,8 @@ class TasksWidget(QWidget):
         self._row = QHBoxLayout(self)
         self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(2)
-        self.overflow = Text("", role="TEXT_SECONDARY", size=11, weight=QFont.Weight.DemiBold)
-        self.overflow.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.overflow = OverflowButton()
+        self.overflow.clicked.connect(self.show_overflow)
         self._row.addWidget(self.overflow)
         self._row.addStretch(1)
         self.overflow.hide()
@@ -151,6 +179,8 @@ class TasksWidget(QWidget):
         return QSize(max(BUTTON_SIZE, width), BUTTON_SIZE - 2)
 
     def refresh(self) -> None:
+        if not self.window().updatesEnabled():
+            return                      # barre cachée derrière un jeu : rien à montrer
         windows = self._backend.windows()
         order = [w.hwnd for w in windows]
         for hwnd in [h for h in self._buttons if h not in set(order)]:
@@ -205,8 +235,31 @@ class TasksWidget(QWidget):
             button.setVisible(button in shown)
         hidden = len(buttons) - len(shown)
         self.overflow.set_text(f"+{hidden}")
-        self.overflow.setToolTip("\n".join(b.info.title for b in buttons if b not in shown))
+        self.overflow.setToolTip("\n".join(b.info.title for b in buttons if b not in shown)
+                                 + "\nClic : afficher une de ces fenêtres")
         self.overflow.setVisible(hidden > 0)
+
+    @property
+    def hidden_windows(self) -> list[WindowInfo]:
+        """Fenêtres repliées derrière « +N »."""
+        return [b.info for b in self.buttons if not b.isVisible()]
+
+    def overflow_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for info in self.hidden_windows:
+            pixmap = app_pixmap(info.exe, info.app, 16, self.devicePixelRatioF())
+            label = info.title if len(info.title) <= 60 else info.title[:59] + "…"
+            if info.minimized:
+                label += "  (réduite)"
+            action = menu.addAction(QIcon(pixmap), label)
+            action.triggered.connect(lambda _checked=False, h=info.hwnd: self._activate(h))
+        return menu
+
+    def show_overflow(self) -> None:
+        menu = self.overflow_menu()
+        if menu.actions():
+            below = self.overflow.mapToGlobal(self.overflow.rect().bottomLeft())
+            show_menu(menu, below)
 
     def _activate(self, hwnd: int) -> None:
         button = self._buttons.get(hwnd)

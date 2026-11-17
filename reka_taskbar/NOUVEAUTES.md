@@ -1,5 +1,17 @@
 # Nouveautés de REKA Taskbar
 
+## 1.2.0
+
+- Lecteur de musique au milieu de la barre : pochette, titre et artiste sur deux lignes, avancée du morceau. Un clic ouvre le lecteur complet : grande pochette, frise pour avancer ou reculer dans le morceau, précédent / pause / suivant, et un bouton pour afficher l'application qui joue. Sans musique, il reste discret (« Aucune lecture »), ou se cache (Réglages → Widgets).
+- Jeux en plein écran : Ctrl+Alt+B fait revenir la barre par-dessus le jeu, le temps d'ouvrir une fenêtre ou une application ; elle repart toute seule (raccourci modifiable dans Réglages → Barre).
+- Les fenêtres de la barre (réglages, mini-console, nouveautés) et les applications ouvertes depuis la barre passent devant le jeu au lieu de s'ouvrir derrière.
+- Derrière un jeu, la barre ne se redessine plus et ne relève plus les fenêtres : rien de pris au jeu.
+- Correction : la barre ne repasse plus devant le jeu quand il change la résolution de l'écran (plein écran exclusif), ce qui pouvait le faire sortir du plein écran.
+- Correction : une fenêtre simplement agrandie n'est plus prise pour un plein écran (la barre disparaissait derrière un navigateur agrandi).
+- Correction : la barre ne se remet plus « au-dessus de tout » chaque seconde, ce qui passait devant les incrustations de jeu et les autres fenêtres toujours visibles.
+- Les applications réduites se rouvrent à coup sûr d'un clic, même quand Windows refusait de les ramener au premier plan.
+- Le compteur « +3 » des fenêtres qui ne tiennent pas dans la barre s'ouvre d'un clic : la liste permet de les afficher (réduites comprises).
+
 ## 1.1.1
 
 - Correction : la vérification du plein écran (Ctrl+Échap, passage derrière les jeux) plantait à chaque seconde sous Windows et ne faisait rien. Elle fonctionne maintenant.

@@ -20,9 +20,10 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "REKA Taskbar"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.0"
 APP_AUTHORS = "Regrettable et Zerka"
 CONFIG_FILENAME = "config.json"
+LAYOUT_VERSION = 2            # 2 : le lecteur de musique au milieu de la barre
 
 log = logging.getLogger(__name__)
 
@@ -85,9 +86,34 @@ def load_config() -> dict[str, Any]:
                 log.error("Config illisible non renommée (%s).", move_error)
                 return deep_merge(defaults, {})
     cfg = deep_merge(defaults, user)
+    if user and migrate_layout(cfg, user):
+        save_quietly(cfg)
     if not user_path.is_file():
         save_config(cfg)
     return cfg
+
+
+def migrate_layout(cfg: dict[str, Any], user: dict[str, Any]) -> bool:
+    """Une fois, pour une config d'avant la 1.2 : le lecteur de musique va au
+    milieu de la barre (en tête de la zone du centre), où qu'il soit. True si
+    la config a changé. Ensuite, la disposition choisie est respectée."""
+    try:
+        version = int(user.get("layout_version", 1))
+    except (TypeError, ValueError):
+        version = 1
+    if version >= LAYOUT_VERSION:
+        return False
+    cfg["layout_version"] = LAYOUT_VERSION
+    layout = cfg.get("layout")
+    if not isinstance(layout, dict):
+        return True
+    for zone, keys in list(layout.items()):
+        if isinstance(keys, list):
+            layout[zone] = [key for key in keys if key != "media"]
+    center = layout.get("center") if isinstance(layout.get("center"), list) else []
+    layout["center"] = ["media", *center]
+    log.info("Disposition mise à jour : lecteur de musique au milieu de la barre.")
+    return True
 
 
 def save_config(cfg: dict[str, Any]) -> None:

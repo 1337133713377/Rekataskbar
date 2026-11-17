@@ -1,6 +1,7 @@
 """Système, météo, raccourcis Windows, fenêtres, ancrage."""
 
 import sys
+import time
 
 import pytest
 
@@ -174,6 +175,81 @@ def test_covers_screen():
     assert not appbar.covers((0, 0, 1920, 1040), screen)              # fenêtre sans la barre des tâches
     assert not appbar.covers((100, 100, 1820, 980), screen)           # fenêtre normale
     assert not appbar.foreground_fills_screen(0)                      # hors Windows : jamais
+    assert appbar.fullscreen_foreground(0) == 0
+
+
+def test_fullscreen_rules():
+    screen = (0, 0, 1920, 1080)
+    assert appbar.is_fullscreen((0, 0, 1920, 1080), screen, style=0x80000000)    # jeu sans bord
+    assert appbar.is_fullscreen((0, 0, 1920, 1080), screen, zoomed=True)         # agrandi sans titre
+    # Navigateur agrandi, rien de réservé à l'écran : ses bords invisibles débordent
+    assert not appbar.is_fullscreen((-8, -8, 1928, 1088), screen, style=0x00CF0000, zoomed=True)
+    assert appbar.is_fullscreen((-8, -8, 1928, 1088), screen, style=0x00CF0000)  # plein écran F11
+    assert not appbar.is_fullscreen((0, 0, 1920, 1080), screen, class_name="WorkerW")   # bureau
+    assert not appbar.is_fullscreen((0, 0, 1280, 720), screen)
+
+
+def test_find_app_matches_media_names_to_windows():
+    from core.windows import WindowInfo, find_app
+
+    windows = [WindowInfo(1, "Firefox", "C:/Apps/firefox.exe"),
+               WindowInfo(2, "Spotify Premium", "C:/Apps/Spotify.exe"),
+               WindowInfo(3, "Nouvel onglet", "C:/Program Files/Edge/msedge.exe")]
+    assert find_app(windows, "Spotify").hwnd == 2
+    assert find_app(windows, "Edge").hwnd == 3                        # « msedge »
+    assert find_app(windows, "firefox").hwnd == 1
+    assert find_app(windows, "Deezer") is None and find_app(windows, "") is None
+
+
+def test_media_timeline_helpers():
+    from datetime import datetime, timedelta, timezone
+
+    from core.media import (MediaInfo, format_time, same_track_on_time, timeline_position,
+                            to_seconds)
+
+    assert format_time(0) == "0:00" and format_time(187.9) == "3:07"
+    assert format_time(3765) == "1:02:45"
+    assert to_seconds(timedelta(minutes=2)) == 120.0 and to_seconds(1_500_000_000) == 150.0
+    assert to_seconds(None) == 0.0 and to_seconds(object()) == 0.0
+    now = datetime(2026, 11, 17, 12, 0, 10, tzinfo=timezone.utc)
+    last = now - timedelta(seconds=10)
+    assert timeline_position(60, 0, 200, last, True, now) == (70.0, 200.0)   # 10 s de lecture
+    assert timeline_position(60, 0, 200, last, False, now) == (60.0, 200.0)  # en pause
+    assert timeline_position(195, 0, 200, last, True, now) == (200.0, 200.0)  # borné à la fin
+    assert timeline_position(60, 0, 0, last.replace(tzinfo=None), True, now) == (70.0, 0.0)
+
+    info = MediaInfo("Titre", playing=True, position=10.0, duration=100.0, updated=50.0)
+    assert info.position_at(55.0) == 15.0 and info.position_at(500.0) == 100.0
+    paused = MediaInfo("Titre", playing=False, position=10.0, duration=100.0, updated=50.0)
+    assert paused.position_at(55.0) == 10.0
+    import time
+
+    now_s = time.monotonic()
+    a = MediaInfo("Titre", playing=True, position=10.0, duration=100.0, updated=now_s - 1.0)
+    b = MediaInfo("Titre", playing=True, position=11.0, duration=100.0, updated=now_s)
+    assert same_track_on_time(a, b)                       # la frise avance comme prévu
+    c = MediaInfo("Titre", playing=True, position=60.0, duration=100.0, updated=now_s)
+    assert not same_track_on_time(a, c)                   # saut dans le morceau
+    assert not same_track_on_time(a, MediaInfo("Autre", playing=True, position=11.0,
+                                               duration=100.0, updated=now_s))
+
+
+def test_demo_media_seeks_and_tracks_time(qapp):
+    from core.media import DemoMedia
+
+    media = DemoMedia()
+    seen = []
+    media.changed.connect(seen.append)
+    media.start()
+    assert media.current.duration == 214.0 and media.current.position_at() >= 71.0
+    media.seek(100.0)
+    assert abs(media.current.position_at() - 100.0) < 0.5
+    media.play_pause()
+    position = media.current.position_at()
+    time.sleep(0.05)
+    assert media.current.position_at() == position        # en pause : la frise ne bouge plus
+    media.next()
+    assert media.current.position_at() < 0.5 and len(seen) == 4
 
 
 def test_bar_rect_and_monitor_choice():

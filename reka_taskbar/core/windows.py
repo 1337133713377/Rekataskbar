@@ -81,6 +81,22 @@ class WindowBackend:
     def close(self, hwnd: int) -> None:
         pass
 
+    def find_app(self, app: str) -> WindowInfo | None:
+        """Une fenêtre de l'application `app` (« Spotify », « Chrome »…), ou None."""
+        return find_app(self.windows(), app)
+
+
+def find_app(windows: list[WindowInfo], app: str) -> WindowInfo | None:
+    key = app.strip().lower()
+    if not key:
+        return None
+    for exact in (True, False):
+        for window in windows:
+            name = window.app.lower()
+            if name == key if exact else (key in name or name in key and len(name) > 2):
+                return window
+    return None
+
 
 class NullWindows(WindowBackend):
     pass
@@ -182,10 +198,26 @@ class Win32Windows(WindowBackend):
         return self._paths[pid]
 
     def activate(self, hwnd: int) -> None:
+        """Affiche la fenêtre : la restaure si elle est réduite et la met au
+        premier plan, même si Windows le refuse d'ordinaire (barre sans focus,
+        jeu au premier plan). Si l'application attend une réponse dans une
+        boîte de dialogue, c'est elle qui vient devant."""
         api = self._api
-        if api.user32.IsIconic(hwnd):
+        if not api.user32.IsWindow(hwnd):
+            return
+        target = int(api.user32.GetLastActivePopup(hwnd) or hwnd)
+        if target != hwnd and not (api.user32.IsWindowVisible(target)
+                                   and api.user32.IsWindowEnabled(target)):
+            target = hwnd
+        iconic = bool(api.user32.IsIconic(hwnd))
+        try:
+            api.force_foreground(target)
+        except OSError as exc:
+            log.debug("Premier plan refusé pour %#x : %s", hwnd, exc)
+        if iconic:
+            # Après la mise au premier plan : la fenêtre restaurée s'ouvre devant.
+            # Asynchrone : une application qui ne répond pas ne bloque pas la barre
             api.user32.ShowWindowAsync(hwnd, api.SW_RESTORE)
-        api.user32.SetForegroundWindow(hwnd)
         self._last_foreground = hwnd
 
     def minimize(self, hwnd: int) -> None:

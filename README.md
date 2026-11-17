@@ -11,8 +11,8 @@ Une barre des tâches personnalisée pour Windows 10 / 11, avec des widgets d'us
 | **Démarrer** | le menu Démarrer de Windows | clic ; clic droit : Explorateur, Gestionnaire des tâches, verrouiller |
 | **Bouton REKA** | REKA ouverte ou non, Voicemeeter connecté ou non (pastille verte / ambre / grise) | clic : affiche la console, ou la lance si elle est fermée |
 | **Raccourcis** | tes programmes, dossiers et fichiers préférés | clic |
-| **Fenêtres ouvertes** | une icône par fenêtre, la fenêtre active soulignée | clic : afficher / réduire · clic du milieu : fermer |
-| **Musique en cours** | pochette, titre, artiste (Spotify, Deezer, navigateur…) | précédent / pause / suivant |
+| **Fenêtres ouvertes** | une icône par fenêtre, la fenêtre active soulignée, les fenêtres réduites estompées | clic : afficher (même réduite) / réduire · clic du milieu : fermer · « +3 » : liste des fenêtres qui ne tiennent pas |
+| **Lecteur de musique** | au milieu de la barre : pochette, titre et artiste, avancée du morceau (Spotify, Deezer, navigateur…) | précédent / pause / suivant · clic : lecteur complet (grande pochette, frise pour avancer ou reculer, bouton pour afficher l'application) |
 | **Canaux de REKA** | chaque canal de la console avec son niveau | clic : muet · molette : volume · bouton à curseurs : mini-console |
 | **Micro** | micro ouvert ou coupé, et son niveau | clic : couper / rouvrir · molette : volume · raccourci clavier global |
 | **Casque** | volume et niveau de la sortie casque | molette : volume · clic : muet · clic du milieu : 0 dB |
@@ -85,14 +85,16 @@ Les nouveautés de chaque version sont dans [NOUVEAUTES.md](reka_taskbar/NOUVEAU
 
 | Onglet | Réglages |
 |---|---|
-| **Barre** | en haut ou en bas, hauteur, écran, opacité, place réservée (les fenêtres agrandies s'arrêtent à la barre), passage derrière les jeux en plein écran, masquage de la barre de Windows, démarrage avec Windows, mises à jour automatiques |
-| **Widgets** | zone et ordre de chaque widget (glisser-déposer), secondes et date de l'horloge, titres des fenêtres, ville de la météo |
+| **Barre** | en haut ou en bas, hauteur, écran, opacité, place réservée (les fenêtres agrandies s'arrêtent à la barre), passage derrière les jeux en plein écran et raccourci pour la rappeler en jeu, masquage de la barre de Windows, démarrage avec Windows, mises à jour automatiques |
+| **Widgets** | zone et ordre de chaque widget (glisser-déposer), secondes et date de l'horloge, titres des fenêtres, lecteur affiché même sans musique, ville de la météo |
 | **REKA** | état du lien, thème, canal du micro, raccourci « couper le micro », emplacement de `REKA.exe` |
 | **Raccourcis** | programmes, dossiers et fichiers du widget Raccourcis |
 
 **Masquer la barre de Windows.** L'option la cache et la passe en masquage automatique ; la zone de notification (icônes près de l'horloge) disparaît avec elle. Elle revient dès que tu décoches l'option ou que tu quittes REKA Taskbar. Si elle restait cachée après un arrêt brutal, le lancement suivant la rend, ou bien : `REKA-Taskbar.exe --restore-taskbar`.
 
 **Raccourci du micro.** Par exemple `Ctrl+Alt+M`, `F13` ou `Pause`. Il fonctionne partout, y compris en jeu.
+
+**Jeux en plein écran.** La barre passe derrière un jeu ou une vidéo en plein écran sur son écran, et cesse alors de se redessiner : elle ne prend rien au jeu. Elle revient dès qu'une autre fenêtre passe devant (Alt+Tab, menu Démarrer…). Pour ouvrir une fenêtre ou une application sans quitter le jeu, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd> (modifiable dans **Réglages → Barre**) la fait revenir par-dessus le jeu ; elle repart toute seule quelques secondes après, ou au deuxième appui. Les fenêtres de la barre (réglages, mini-console, nouveautés) et les applications ouvertes depuis la barre passent devant le jeu.
 
 **Météo.** Elle vient d'[Open-Meteo](https://open-meteo.com/), sans compte ni clé. Seul le nom de la ville est envoyé, et seulement s'il est renseigné.
 
@@ -126,7 +128,7 @@ Même base que REKA : Python 3.11+, PySide6, PyInstaller. Voicemeeter est pilot�
 | `tests/e2e_update.py` | mise à jour de bout en bout avec le vrai exe (build Windows) |
 | `core/demo.py` | moteurs simulés (`--demo`, `--selftest`, tests) |
 | `ui/bar.py`, `ui/widgets/` | la barre et ses widgets |
-| `ui/mixer_popup.py`, `ui/settings_dialog.py` | mini-console, réglages |
+| `ui/mixer_popup.py`, `ui/media_player.py`, `ui/settings_dialog.py` | mini-console, lecteur de musique, réglages |
 
 Chaque push lance les tests sous Linux puis sous Windows (dont les appels Win32 réels), construit l'exe et lui fait passer son auto-test (`--selftest`).
 
