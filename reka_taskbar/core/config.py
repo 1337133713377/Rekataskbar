@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "REKA Taskbar"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 APP_AUTHORS = "Regrettable et Zerka"
 CONFIG_FILENAME = "config.json"
-LAYOUT_VERSION = 2            # 2 : le lecteur de musique au milieu de la barre
+LAYOUT_VERSION = 3            # 2 : lecteur au milieu ; 3 : flèche des icônes cachées
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +106,13 @@ def migrate_layout(cfg: dict[str, Any], user: dict[str, Any]) -> bool:
     cfg["layout_version"] = LAYOUT_VERSION
     layout = cfg.get("layout")
     if not isinstance(layout, dict):
+        return True
+    if version < 3 and not any(isinstance(k, list) and "tray" in k for k in layout.values()):
+        right = layout.get("right") if isinstance(layout.get("right"), list) else []
+        at = right.index("clock") if "clock" in right else len(right)
+        layout["right"] = [*right[:at], "tray", *right[at:]]
+        log.info("Disposition mise à jour : flèche des icônes cachées près de l'horloge.")
+    if version >= 2:
         return True
     for zone, keys in list(layout.items()):
         if isinstance(keys, list):

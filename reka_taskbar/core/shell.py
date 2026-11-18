@@ -59,6 +59,14 @@ def open_start_menu() -> None:
         winapi.press_windows_key()
 
 
+def open_tray_overflow() -> None:
+    """Icônes cachées près de l'horloge (applications réduites dans la zone de notification)."""
+    if sys.platform == "win32":
+        from core import winapi
+
+        winapi.open_tray_overflow()
+
+
 def lock_session() -> None:
     if sys.platform == "win32":
         from core import winapi

@@ -158,6 +158,10 @@ def _power(p: QPainter, _c: QColor) -> None:
     p.drawArc(QRectF(4.5, 5.5, 15, 15), 130 * 16, -260 * 16)
 
 
+def _chevron(p: QPainter, _c: QColor) -> None:
+    p.drawPolyline(QPolygonF([QPointF(6, 15), QPointF(12, 9), QPointF(18, 15)]))
+
+
 def _calendar(p: QPainter, _c: QColor) -> None:
     p.drawRoundedRect(QRectF(4, 5.5, 16, 14.5), 2, 2)
     p.drawLine(QPointF(4, 10), QPointF(20, 10))
@@ -239,7 +243,7 @@ _ICONS = {
     "windows": _windows, "mic": _mic, "mic_off": _mic_off, "headphones": _headphones,
     "sliders": _sliders, "play": _play, "pause": _pause, "next": _next, "previous": _previous,
     "cpu": _cpu, "memory": _memory, "down": _down, "up": _up, "gear": _gear, "music": _music,
-    "power": _power, "calendar": _calendar, "sun": _sun, "moon": _moon, "cloud": _cloud,
+    "power": _power, "chevron": _chevron, "calendar": _calendar, "sun": _sun, "moon": _moon, "cloud": _cloud,
     "partly": _partly, "rain": _rain, "snow": _snow, "storm": _storm, "fog": _fog,
 }
 NAMES = tuple(_ICONS)

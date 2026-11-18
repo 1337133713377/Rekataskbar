@@ -422,7 +422,7 @@ def test_media_player_is_in_the_middle_of_the_bar(qapp, taskbar):
     # Démo : la zone de droite (tout affiché) dépasse la moitié de la barre ; le
     # lecteur est alors aussi près du centre que possible, la droite au plus juste
     right = bar._zones["right"]
-    assert abs(offset()) < 80 and right.width() == right.minimumSizeHint().width()
+    assert abs(offset()) < 110 and right.width() == right.minimumSizeHint().width()
     taskbar.cfg["layout"]["right"] = ["strips", "mic", "headphone", "clock"]
     bar.build_widgets()
     media = bar.widgets["media"]

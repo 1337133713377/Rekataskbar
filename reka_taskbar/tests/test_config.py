@@ -40,7 +40,7 @@ def test_media_player_moves_to_the_middle_once(appdata):
     path.write_text(json.dumps({"layout": {"left": ["start", "media", "tasks"], "center": [],
                                            "right": ["clock"]}}), encoding="utf-8")
     cfg = config.load_config()
-    assert cfg["layout"] == {"left": ["start", "tasks"], "center": ["media"], "right": ["clock"]}
+    assert cfg["layout"] == {"left": ["start", "tasks"], "center": ["media"], "right": ["tray", "clock"]}
     assert config.read_json(path)["layout_version"] == config.LAYOUT_VERSION
     cfg["layout"]["center"] = []                         # retiré ensuite : c'est respecté
     config.save_config(cfg)

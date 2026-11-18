@@ -1,6 +1,6 @@
 {
   "log_level": "INFO",
-  "layout_version": 2,
+  "layout_version": 3,
   "bar": {
     "edge": "top",
     "height": 44,
@@ -33,6 +33,7 @@
       "system",
       "weather",
       "battery",
+      "tray",
       "clock"
     ]
   },

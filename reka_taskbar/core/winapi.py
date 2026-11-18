@@ -121,6 +121,8 @@ ASFW_ANY = 0xFFFFFFFF
 QUNS_RUNNING_D3D_FULL_SCREEN = 3       # jeu Direct3D en plein écran exclusif
 MONITORINFOF_PRIMARY = 1
 VK_LWIN = 0x5B
+VK_B, VK_RETURN = 0x42, 0x0D
+BM_CLICK = 0x00F5
 KEYEVENTF_KEYUP = 0x0002
 
 
@@ -209,6 +211,24 @@ def force_foreground(hwnd: int) -> bool:
         return True
     user32.SwitchToThisWindow(hwnd, True)
     return int(user32.GetForegroundWindow() or 0) == hwnd
+
+
+def open_tray_overflow() -> None:
+    """Ouvre la fenêtre des icônes cachées de la zone de notification (la
+    petite flèche près de l'horloge). Windows 10 : clic sur le bouton de la
+    flèche ; sinon (Windows 11) : Win+B met le focus sur la flèche, Entrée l'ouvre."""
+    tray = user32.FindWindowW("Shell_TrayWnd", None)
+    notify = user32.FindWindowExW(tray, None, "TrayNotifyWnd", None) if tray else None
+    button = user32.FindWindowExW(notify, None, "Button", None) if notify else None
+    if button and user32.IsWindowVisible(button):
+        user32.PostMessageW(button, BM_CLICK, 0, 0)
+        return
+    user32.keybd_event(VK_LWIN, 0, 0, 0)
+    user32.keybd_event(VK_B, 0, 0, 0)
+    user32.keybd_event(VK_B, 0, KEYEVENTF_KEYUP, 0)
+    user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+    user32.keybd_event(VK_RETURN, 0, 0, 0)
+    user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
 
 
 def press_windows_key() -> None:
