@@ -1,5 +1,9 @@
 # Nouveautés de REKA Taskbar
 
+## 1.3.1
+
+- Nouveau bouton « ▾ 2 » dans les fenêtres ouvertes, visible dès qu'une application est réduite : un clic liste toutes les applications réduites pour en rouvrir une, ou « Tout rouvrir » d'un coup.
+
 ## 1.3.0
 
 - Nouveau look du lecteur, en haut au milieu : l'icône de l'application qui joue (Spotify, Deezer, navigateur…), le nom du morceau et une vague d'audio qui danse au rythme de la musique.

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "REKA Taskbar"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 APP_AUTHORS = "Regrettable et Zerka"
 CONFIG_FILENAME = "config.json"
 LAYOUT_VERSION = 2            # 2 : le lecteur de musique au milieu de la barre
