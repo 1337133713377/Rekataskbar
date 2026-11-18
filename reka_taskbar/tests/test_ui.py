@@ -483,6 +483,20 @@ def test_minimized_window_comes_back_on_click(qapp, taskbar):
     assert tasks.buttons[2].info.active and not tasks.buttons[2].info.minimized
 
 
+def test_minimized_button_lists_and_restores(qapp, taskbar):
+    tasks = taskbar.bar.widgets["tasks"]
+    tasks.refresh()
+    assert not tasks.minimized_button.isVisibleTo(tasks)
+    for button in tasks.buttons[1:3]:
+        taskbar.windows.minimize(button.info.hwnd)
+    tasks.refresh()
+    assert tasks.minimized_button.isVisibleTo(tasks) and tasks.minimized_button.text == "▾ 2"
+    labels = [a.text() for a in tasks.minimized_menu().actions()]
+    assert "Tout rouvrir" in labels
+    tasks.restore_all()
+    assert not tasks.minimized_windows and not tasks.minimized_button.isVisibleTo(tasks)
+
+
 def test_shortcuts_weather_battery_and_system(qapp, taskbar):
     bar = taskbar.bar
     assert len(bar.widgets["shortcuts"].buttons) == 1

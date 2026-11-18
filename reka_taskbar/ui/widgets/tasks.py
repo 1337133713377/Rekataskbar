@@ -4,7 +4,9 @@ Fenêtres ouvertes : un bouton par fenêtre, comme dans la barre de Windows.
 Clic : afficher la fenêtre, réduite ou non (ou la réduire si elle est déjà
 devant). Clic du milieu : la fermer. Les boutons qui ne tiennent pas dans la
 largeur disponible sont repliés derrière un compteur « +3 » : un clic dessus
-liste ces fenêtres, pour les afficher.
+liste ces fenêtres, pour les afficher. Un bouton « ▾ 2 » apparaît dès qu'une
+fenêtre est réduite : il liste toutes les applications réduites pour les
+rouvrir une à une, ou toutes d'un coup.
 """
 
 from __future__ import annotations
@@ -155,8 +157,12 @@ class TasksWidget(QWidget):
         self.overflow = OverflowButton()
         self.overflow.clicked.connect(self.show_overflow)
         self._row.addWidget(self.overflow)
+        self.minimized_button = OverflowButton()
+        self.minimized_button.clicked.connect(self.show_minimized)
+        self._row.addWidget(self.minimized_button)
         self._row.addStretch(1)
         self.overflow.hide()
+        self.minimized_button.hide()
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
@@ -203,6 +209,44 @@ class TasksWidget(QWidget):
                 self._row.insertWidget(position, self._buttons[hwnd])
             self.updateGeometry()
         self._fit()
+        self._update_minimized()
+
+    def _update_minimized(self) -> None:
+        reduced = self.minimized_windows
+        self.minimized_button.set_text(f"▾ {len(reduced)}")
+        self.minimized_button.setToolTip(
+            "Applications réduites :\n" + "\n".join(i.title for i in reduced)
+            + "\nClic : en rouvrir une, ou toutes")
+        self.minimized_button.setVisible(bool(reduced))
+
+    @property
+    def minimized_windows(self) -> list[WindowInfo]:
+        return [b.info for b in self.buttons if b.info.minimized]
+
+    def minimized_menu(self) -> QMenu:
+        menu = QMenu(self)
+        reduced = self.minimized_windows
+        for info in reduced:
+            pixmap = app_pixmap(info.exe, info.app, 16, self.devicePixelRatioF())
+            label = info.title if len(info.title) <= 60 else info.title[:59] + "…"
+            action = menu.addAction(QIcon(pixmap), label)
+            action.triggered.connect(lambda _checked=False, h=info.hwnd: self._activate(h))
+        if len(reduced) > 1:
+            menu.addSeparator()
+            menu.addAction("Tout rouvrir", self.restore_all)
+        return menu
+
+    def show_minimized(self) -> None:
+        menu = self.minimized_menu()
+        if menu.actions():
+            below = self.minimized_button.mapToGlobal(self.minimized_button.rect().bottomLeft())
+            show_menu(menu, below)
+
+    def restore_all(self) -> None:
+        """Rouvre toutes les fenêtres réduites (la première de la barre finit devant)."""
+        for info in reversed(self.minimized_windows):
+            self._backend.activate(info.hwnd)
+        self.refresh()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -219,7 +263,8 @@ class TasksWidget(QWidget):
                 button.show()
             self.overflow.hide()
             return
-        room = available - 34            # place du compteur
+        room = available - 34 - (self.minimized_button.sizeHint().width()
+                                 if self.minimized_windows else 0)   # compteurs
         shown: list[TaskButton] = []
         used = 0
         active = next((b for b in buttons if b.info.active), None)
