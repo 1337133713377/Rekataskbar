@@ -1,5 +1,9 @@
 # Nouveautés de REKA Taskbar
 
+## 1.3.2
+
+- La petite flèche des icônes cachées (les applications réduites près de l'horloge : Discord, Steam…) est dans la barre, à gauche de l'horloge : un clic les affiche, même quand la barre de Windows est cachée. Elle se déplace ou se retire dans Réglages → Widgets.
+
 ## 1.3.1
 
 - Nouveau bouton « ▾ 2 » dans les fenêtres ouvertes, visible dès qu'une application est réduite : un clic liste toutes les applications réduites pour en rouvrir une, ou « Tout rouvrir » d'un coup.

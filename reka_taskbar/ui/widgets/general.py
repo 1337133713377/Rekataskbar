@@ -55,6 +55,20 @@ class StartWidget(Pill):
                 ("Verrouiller la session", shell.lock_session)]
 
 
+class TrayWidget(Pill):
+    """La petite flèche des icônes cachées : les applications réduites dans la
+    zone de notification (Discord, Steam, antivirus…)."""
+
+    key = "tray"
+
+    def __init__(self, ctx: Context, parent: QWidget | None = None) -> None:
+        super().__init__(parent, clickable=True)
+        self._ctx = ctx
+        self.row.addWidget(Icon("chevron", role="TEXT_SECONDARY", size=16))
+        self.setToolTip("Icônes cachées (applications réduites près de l'horloge)")
+        self.clicked.connect(shell.open_tray_overflow)
+
+
 # --------------------------------------------------------------------------- #
 # Raccourcis
 # --------------------------------------------------------------------------- #

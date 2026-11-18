@@ -30,7 +30,7 @@ from ui.mixer_popup import MixerPopup
 from ui.popup import show_menu
 from ui.widgets.base import Context
 from ui.widgets.general import (BatteryWidget, ClockWidget, MediaWidget, NetworkWidget,
-                                ShortcutsWidget, StartWidget, SystemWidget, WeatherWidget)
+                                ShortcutsWidget, StartWidget, TrayWidget, SystemWidget, WeatherWidget)
 from ui.widgets.reka import HeadphoneWidget, MicWidget, RekaWidget, StripsWidget, mic_strip
 from ui.widgets.tasks import TasksWidget
 from ui.widgets.update import UpdateWidget
@@ -51,6 +51,7 @@ WIDGETS = {                   # clé (config layout) → (nom affiché, classe)
     "network": ("Débit du réseau", NetworkWidget),
     "weather": ("Météo", WeatherWidget),
     "battery": ("Batterie", BatteryWidget),
+    "tray": ("Icônes cachées (flèche)", TrayWidget),
     "clock": ("Horloge, calendrier", ClockWidget),
 }
 MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 28, 72, 44
